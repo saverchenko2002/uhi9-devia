@@ -1,0 +1,7 @@
+@openzeppelin/contracts-upgradeable/=dependencies/@openzeppelin-contracts-upgradeable-5.3.0/
+@openzeppelin/contracts/=dependencies/@openzeppelin-contracts-5.3.0/
+@pythnetwork/pyth-sdk-solidity/=dependencies/@pythnetwork-pyth-sdk-solidity-4.3.1/
+@uniswap/v4-core/=dependencies/uniswap-v4-core-1/
+@uniswap/v4-periphery/=dependencies/uniswap-v4-periphery-60cd93803ac2b7fa65fd6cd351fd5fd4cc8c9db5/
+@v4-hooks/=dependencies/@v4-hooks-1.0.0/
+forge-std-1.16.1/=dependencies/forge-std-1.16.1/

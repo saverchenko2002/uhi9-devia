@@ -1,0 +1,37 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["dependencies"]
+via_ir = true
+
+
+[lint]
+exclude_lints = ["mixed-case-function"]
+
+[rpc_endpoints]
+mainnet = "${RPC_MAINNET}"
+
+[fmt]
+line_length = 100
+contract_new_lines = true
+sort_imports = true
+quote_style = "preserve"
+singleQuote = true
+
+[soldeer]
+recursive_deps = false
+remappings_generate = true
+remappings_regenerate = false
+remappings_version = false
+remappings_location = "txt"
+
+[dependencies]
+forge-std = "1.16.1"
+"@openzeppelin-contracts-upgradeable" = "5.3.0"
+"@openzeppelin-contracts" = "5.3.0"
+"@v4-hooks" = { version = "1.0.0", git = "https://github.com/Uniswap/v4-hooks-public.git", rev = "129f62ac96d5d857a2608769bdac2a8d6ddfd5da"}
+uniswap-v4-core = { version = "1", git = "https://github.com/Uniswap/v4-core.git", rev = "d153b048868a60c2403a3ef5b2301bb247884d46" }
+uniswap-v4-periphery = "60cd93803ac2b7fa65fd6cd351fd5fd4cc8c9db5"
+"@pythnetwork-pyth-sdk-solidity" = "4.3.1"
+
+

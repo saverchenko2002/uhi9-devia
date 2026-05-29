@@ -1,0 +1,46 @@
+[[dependencies]]
+name = "@openzeppelin-contracts"
+version = "5.3.0"
+url = "https://soldeer-revisions.s3.amazonaws.com/@openzeppelin-contracts/5_3_0_10-04-2025_10:51:50_contracts.zip"
+checksum = "fa2bc3db351137c4d5eb32b738a814a541b78e87fbcbfeca825e189c4c787153"
+integrity = "d69addf252dfe0688dcd893a7821cbee2421f8ce53d95ca0845a59530043cfd1"
+
+[[dependencies]]
+name = "@openzeppelin-contracts-upgradeable"
+version = "5.3.0"
+url = "https://soldeer-revisions.s3.amazonaws.com/@openzeppelin-contracts-upgradeable/5_3_0_10-04-2025_10:51:56_contracts-upgradeable.zip"
+checksum = "4bd92f87af0cac7226b12ce367e7327f13431735fa6010508d8c8177f9d3d10f"
+integrity = "fa195a69ef4dfec7fec7fbbb77f424258c821832fdd355b0a6e5fe34d2986a16"
+
+[[dependencies]]
+name = "@pythnetwork-pyth-sdk-solidity"
+version = "4.3.1"
+url = "https://soldeer-revisions.s3.amazonaws.com/@pythnetwork-pyth-sdk-solidity/4_3_1_12-11-2025_06:58:23_pyth-sdk-solidity.zip"
+checksum = "1685d4891bf8df82cff37e1c3699e62854e33f92c0c3cb3e1ce3a8afa9e56b43"
+integrity = "0f2a99b64bc29a7925eb7026a5ef764e220c6c70ae9f3f2fbf11c2447c899cb5"
+
+[[dependencies]]
+name = "@v4-hooks"
+version = "1.0.0"
+git = "https://github.com/Uniswap/v4-hooks-public.git"
+rev = "129f62ac96d5d857a2608769bdac2a8d6ddfd5da"
+
+[[dependencies]]
+name = "forge-std"
+version = "1.16.1"
+url = "https://soldeer-revisions.s3.amazonaws.com/forge-std/1_16_1_08-05-2026_08:51:16_forge-std-1.16.zip"
+checksum = "839b61832925c7152c7b6dffbfa4998d9e606211179bd8f604733124e8a7cb57"
+integrity = "60e55d10150354ca4a1e2985c5456c834b92b82ef85ab0e1d92a7786cddbd219"
+
+[[dependencies]]
+name = "uniswap-v4-core"
+version = "1"
+git = "https://github.com/Uniswap/v4-core.git"
+rev = "d153b048868a60c2403a3ef5b2301bb247884d46"
+
+[[dependencies]]
+name = "uniswap-v4-periphery"
+version = "60cd93803ac2b7fa65fd6cd351fd5fd4cc8c9db5"
+url = "https://soldeer-revisions.s3.amazonaws.com/uniswap-v4-periphery/60cd93803ac2b7fa65fd6cd351fd5fd4cc8c9db5_25-08-2025_15:26:30_uniswap-v4-periphery-60cd93803ac2b7fa65fd6cd351fd5fd4cc8c9db5.zip"
+checksum = "19c161fe1e266d6652c60b823ace3e6592ae782b51e32e35e71f468d9fea46d4"
+integrity = "b2c85344c8ed94b02170b9c00533a3dea034aa8d054f7fb2063525ae8ae733ae"
