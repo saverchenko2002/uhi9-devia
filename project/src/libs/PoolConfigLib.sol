@@ -32,8 +32,8 @@ library PoolConfigLib {
     error InvalidFeeBounds();
     error InvalidShareSplit();
     error InvalidPolicyBounds();
-    error PriceFeedNotConfigured(bytes32 poolId);
     error PoolDisabled();
+    error PriceFeedNotConfigured(bytes32 poolId);
 
     function validate(PoolConfig memory cfg) internal pure {
         if (!cfg.enabled) revert PoolDisabled();
@@ -77,6 +77,7 @@ library PoolConfigLib {
         });
     }
 
+    /// @dev Pool may be registered with zero feed id; feed path must revert until configured.
     function requirePriceFeedId(bytes32 poolId, PoolConfig memory cfg) internal pure {
         if (cfg.priceFeedId == bytes32(0)) revert PriceFeedNotConfigured(poolId);
     }

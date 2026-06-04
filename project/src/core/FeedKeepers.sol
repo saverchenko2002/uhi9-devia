@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {BaseUpgradeable} from "src/base/BaseUpgradeable.sol";
+import {BaseInit} from "src/base/BaseInit.sol";
 import {IFeedKeepers} from "src/interfaces/IFeedKeepers.sol";
 
 /// @notice Local feed metadata only. Price is always read from oracle.getPrice.
-contract FeedKeepers is IFeedKeepers, BaseUpgradeable {
+contract FeedKeepers is IFeedKeepers, BaseInit {
 
     struct FeedMeta {
         address lastProvider;
@@ -24,10 +24,7 @@ contract FeedKeepers is IFeedKeepers, BaseUpgradeable {
         _;
     }
 
-    function initialize(address owner) external initializer {
-        __Base_init();
-        _transferOwnership(owner);
-    }
+    constructor(address owner) BaseInit(owner) {}
 
     function setExecutor(address executor, bool allowed) external onlyOwner {
         isExecutor[executor] = allowed;

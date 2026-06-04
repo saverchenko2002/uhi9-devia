@@ -9,6 +9,7 @@ struct PoolConfig {
     uint16 maxFeeBps;
     uint32 stalenessSlopePpmPerSec;
     uint32 deviationSlopePpmPerBps;
+    /// @dev Passed to IPyth.getPriceNoOlderThan(priceFeedId, maxStalenessSec).
     uint32 maxStalenessSec;
 
     // --- keeper / sync policy ---
@@ -23,6 +24,8 @@ struct PoolConfig {
     uint16 syncShareBps;
     uint16 feedShareBps;
 
+    // --- oracle (Pyth) ---
+    /// @dev bytes32(0) by default; owner must set via updatePoolConfig before feed updates.
     bytes32 priceFeedId;
 
     bool enabled;
