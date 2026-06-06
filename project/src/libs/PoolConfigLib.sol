@@ -10,9 +10,9 @@ library PoolConfigLib {
     uint32 internal constant PPM = 1_000_000;
 
     // --- default dynamic fee (template for new pools) ---
-    uint16 internal constant BASE_FEE_BPS = 30;
-    uint16 internal constant MIN_FEE_BPS = 15;
-    uint16 internal constant MAX_FEE_BPS = 200;
+    uint16 internal constant BASE_FEE_BPS = 66;
+    uint16 internal constant MIN_FEE_BPS = 33;
+    uint16 internal constant MAX_FEE_BPS = 198;
     uint32 internal constant STALENESS_SLOPE_PPM_PER_SEC = 35_000;
     uint32 internal constant DEVIATION_SLOPE_PPM_PER_BPS = 7_000;
     uint32 internal constant MAX_STALENESS_SEC = 180;

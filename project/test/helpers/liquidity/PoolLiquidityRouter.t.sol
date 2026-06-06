@@ -10,8 +10,6 @@ import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.so
 import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
 import {UniswapV4Lib} from "src/libs/UniswapV4Lib.sol";
 
-import {console2} from "forge-std/src/console2.sol";
-
 /// @dev Test helper: unlock → modifyLiquidity → settle.
 contract PoolLiquidityRouter is IUnlockCallback {
 
@@ -41,8 +39,6 @@ contract PoolLiquidityRouter is IUnlockCallback {
         uint256 amount1,
         address payer
     ) external payable returns (BalanceDelta delta) {
-        console2.log("hello1");
-
         uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
             sqrtPriceX96,
             TickMath.getSqrtPriceAtTick(tickLower),
@@ -60,6 +56,38 @@ contract PoolLiquidityRouter is IUnlockCallback {
                 salt: 0
             }),
             payer
+        );
+    }
+
+    function removeLiquidity(
+        PoolKey calldata key,
+        ModifyLiquidityParams memory params,
+        address recipient
+    ) public returns (BalanceDelta delta) {
+        delta = abi.decode(
+            poolManager.unlock(
+                abi.encode(CallbackData({payer: recipient, key: key, params: params}))
+            ),
+            (BalanceDelta)
+        );
+    }
+
+    function removeAllLiquidity(
+        PoolKey calldata key,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 liquidity,
+        address recipient
+    ) external returns (BalanceDelta delta) {
+        return removeLiquidity(
+            key,
+            ModifyLiquidityParams({
+                tickLower: tickLower,
+                tickUpper: tickUpper,
+                liquidityDelta: -int256(uint256(liquidity)),
+                salt: 0
+            }),
+            recipient
         );
     }
 

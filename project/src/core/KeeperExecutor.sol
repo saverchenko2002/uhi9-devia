@@ -233,15 +233,15 @@ contract KeeperExecutor is IKeeperExecutor, BaseInit, IUnlockCallback {
 
     function _pullCapital(KeeperIntent calldata intent, SyncExecutionContext memory ctx) internal {
         ctx.profitBaseline = IERC20(intent.profitToken).balanceOf(address(this));
-        IERC20(intent.capitalToken).safeTransferFrom(msg.sender, address(this), intent.capitalAmount);
+        IERC20(intent.capitalToken)
+            .safeTransferFrom(msg.sender, address(this), intent.capitalAmount);
     }
 
     function _runArbAndMeasureProfit(KeeperIntent calldata intent, SyncExecutionContext memory ctx)
         internal
         returns (uint256 actualProfit)
     {
-        uint256 amountOut =
-            _executePoolSwap(ctx.key, ctx.plan.zeroForOne, ctx.plan.amountIn);
+        uint256 amountOut = _executePoolSwap(ctx.key, ctx.plan.zeroForOne, ctx.plan.amountIn);
 
         (address executor, bytes memory externalCalldata) =
             KeeperSyncLib.decodeExternalSwap(ctx.ext.sync.externalSwap);

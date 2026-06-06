@@ -8,9 +8,9 @@ import {Vm} from "forge-std/src/Vm.sol";
 import {IKeeperExecutor} from "src/interfaces/IKeeperExecutor.sol";
 import {PoolConfigLib} from "src/libs/PoolConfigLib.sol";
 import {DonateMode, PayoutMode} from "src/types/KeeperExtensionTypes.sol";
+import {TestConstants} from "test/helpers/TestConstants.t.sol";
 import {DynamicFeeTestHelper} from "test/helpers/fee/DynamicFeeTestHelper.t.sol";
 import {PythTestHelper} from "test/helpers/pyth/PythTestHelper.t.sol";
-import {TestConstants} from "test/helpers/TestConstants.t.sol";
 import {PoolSwapRouter} from "test/helpers/swap/PoolSwapRouter.t.sol";
 import {
     ExecuteWithIntentTestBase
@@ -121,7 +121,8 @@ contract DynamicFee_Deviation_Test is ExecuteWithIntentTestBase {
             if (logs[i].topics[0] != FEE_ACCRUED_TOPIC) continue;
             if (logs[i].topics[1] != poolId) continue;
 
-            (,, totalFee,,) = abi.decode(logs[i].data, (address, uint256, uint256, uint256, uint256));
+            (,, totalFee,,) =
+                abi.decode(logs[i].data, (address, uint256, uint256, uint256, uint256));
             return totalFee;
         }
 
@@ -137,14 +138,12 @@ contract DynamicFee_Deviation_Test is ExecuteWithIntentTestBase {
         }
     }
 
-    function _executeKeeperSyncArb()
-        internal
-        returns (uint256, uint256, uint256, uint256)
-    {
+    function _executeKeeperSyncArb() internal returns (uint256, uint256, uint256, uint256) {
         IKeeperExecutor.SyncPreview memory preview = _previewSync();
         uint256 routerUsdtOut = _fairRouterUsdtOut(preview);
-        (IKeeperExecutor.KeeperIntent memory intent,) =
-            _buildArbIntentWithTraits(routerUsdtOut, DonateMode.MIN_ONLY, 0, PayoutMode.WRAPPED, address(0));
+        (IKeeperExecutor.KeeperIntent memory intent,) = _buildArbIntentWithTraits(
+            routerUsdtOut, DonateMode.MIN_ONLY, 0, PayoutMode.WRAPPED, address(0)
+        );
 
         return _executeIntentReturns(intent, routerUsdtOut);
     }

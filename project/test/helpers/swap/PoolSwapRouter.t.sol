@@ -60,9 +60,8 @@ contract PoolSwapRouter is IUnlockCallback {
 
         CallbackData memory cb = abi.decode(data, (CallbackData));
 
-        uint160 sqrtPriceLimitX96 = cb.zeroForOne
-            ? TickMath.MIN_SQRT_PRICE + 1
-            : TickMath.MAX_SQRT_PRICE - 1;
+        uint160 sqrtPriceLimitX96 =
+            cb.zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1;
 
         (Currency inputCurrency, Currency outputCurrency) = cb.zeroForOne
             ? (cb.key.currency0, cb.key.currency1)

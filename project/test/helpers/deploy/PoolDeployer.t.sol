@@ -17,6 +17,7 @@ import {IKeeperExecutor} from "src/interfaces/IKeeperExecutor.sol";
 import {IKeepersTreasury} from "src/interfaces/IKeepersTreasury.sol";
 import {IPoolConfigRegistry} from "src/interfaces/IPoolConfigRegistry.sol";
 import {ISyncKeepers} from "src/interfaces/ISyncKeepers.sol";
+import {PoolConfigLib} from "src/libs/PoolConfigLib.sol";
 import {PoolPriceLib} from "src/libs/PoolPriceLib.sol";
 import {PriceScale} from "src/types/PriceScaleTypes.sol";
 import {TestConstants} from "test/helpers/TestConstants.t.sol";
@@ -150,6 +151,30 @@ library PoolDeployer {
 
         poolId = PoolId.unwrap(key.toId());
         poolManager.initialize(key, sqrtPriceX96);
+    }
+
+    /// @dev (matches `PoolConfigLib.BASE_FEE_BPS`), no hook.
+    function createPlainWethUsdtPool(IPoolManager poolManager, uint160 sqrtPriceX96)
+        internal
+        returns (PoolKey memory key, bytes32 poolId)
+    {
+        (address token0, address token1) = sortTokens(TestConstants.WETH, TestConstants.USDT);
+
+        key = PoolKey({
+            currency0: Currency.wrap(token0),
+            currency1: Currency.wrap(token1),
+            fee: plainPoolStaticFee(),
+            tickSpacing: TestConstants.POOL_TICK_SPACING,
+            hooks: IHooks(address(0))
+        });
+
+        poolId = PoolId.unwrap(key.toId());
+        poolManager.initialize(key, sqrtPriceX96);
+    }
+
+    /// @dev 0.30% LP fee in Uniswap v4 pips (same nominal rate as default dynamic base fee).
+    function plainPoolStaticFee() internal pure returns (uint24) {
+        return PoolConfigLib.BASE_FEE_BPS;
     }
 
     /// @dev WETH (token0) / USDT (token1) at ~3000 USDT per 1 WETH.

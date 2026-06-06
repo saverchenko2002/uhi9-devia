@@ -159,7 +159,8 @@ contract DynamicFeeHook is BaseHook {
         PoolConfig memory cfg = poolConfigRegistry.getPoolConfig(poolId);
         (,, uint64 pythPublishTime) = _readOracleContext(poolId, key, cfg);
 
-        (uint64 feedPublishTime, address feedProvider) = _readFeedAttribution(poolId, pythPublishTime);
+        (uint64 feedPublishTime, address feedProvider) =
+            _readFeedAttribution(poolId, pythPublishTime);
 
         emit SwapKeeperAttribution(
             poolId, pythPublishTime, feedPublishTime, feedProvider, feedProvider != address(0)
@@ -172,7 +173,8 @@ contract DynamicFeeHook is BaseHook {
         SwapParams calldata params,
         BalanceDelta delta
     ) internal {
-        PublicSwapFeeAccrual memory accrual = _computePublicSwapFeeAccrual(poolId, key, params, delta);
+        PublicSwapFeeAccrual memory accrual =
+            _computePublicSwapFeeAccrual(poolId, key, params, delta);
         if (accrual.totalFee == 0 || accrual.feeToken == address(0)) return;
 
         _depositPublicSwapFee(poolId, accrual);

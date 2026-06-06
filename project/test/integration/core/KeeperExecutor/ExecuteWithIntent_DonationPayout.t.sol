@@ -21,8 +21,9 @@ contract KeeperExecutor_ExecuteWithIntent_DonationPayout_Test is ExecuteWithInte
         IKeeperExecutor.SyncPreview memory preview = _previewSync();
         uint256 routerUsdtOut = _fairRouterUsdtOut(preview);
 
-        (IKeeperExecutor.KeeperIntent memory intent,) =
-            _buildArbIntentWithTraits(routerUsdtOut, DonateMode.MIN_ONLY, 0, PayoutMode.WRAPPED, address(0));
+        (IKeeperExecutor.KeeperIntent memory intent,) = _buildArbIntentWithTraits(
+            routerUsdtOut, DonateMode.MIN_ONLY, 0, PayoutMode.WRAPPED, address(0)
+        );
 
         (uint256 actualProfit, uint256 donationAmount, uint256 keeperPayout,) =
             _executeIntentReturns(intent, routerUsdtOut);
@@ -37,8 +38,9 @@ contract KeeperExecutor_ExecuteWithIntent_DonationPayout_Test is ExecuteWithInte
         IKeeperExecutor.SyncPreview memory preview = _previewSync();
         uint256 routerUsdtOut = _fairRouterUsdtOut(preview);
 
-        (IKeeperExecutor.KeeperIntent memory intent,) =
-            _buildArbIntentWithTraits(routerUsdtOut, DonateMode.ALL, 0, PayoutMode.WRAPPED, address(0));
+        (IKeeperExecutor.KeeperIntent memory intent,) = _buildArbIntentWithTraits(
+            routerUsdtOut, DonateMode.ALL, 0, PayoutMode.WRAPPED, address(0)
+        );
 
         (uint256 actualProfit, uint256 donationAmount, uint256 keeperPayout,) =
             _executeIntentReturns(intent, routerUsdtOut);
@@ -75,8 +77,12 @@ contract KeeperExecutor_ExecuteWithIntent_DonationPayout_Test is ExecuteWithInte
         uint256 keeperUsdtBefore = IERC20(TestConstants.USDT).balanceOf(syncKeeper);
         uint256 treasuryBefore = sys.keepersTreasury.claimable(syncKeeper, TestConstants.USDT);
 
-        (uint256 actualProfit, uint256 donationAmount, uint256 keeperPayout, uint256 capitalReturned) =
-            _executeIntentReturns(intent, routerUsdtOut);
+        (
+            uint256 actualProfit,
+            uint256 donationAmount,
+            uint256 keeperPayout,
+            uint256 capitalReturned
+        ) = _executeIntentReturns(intent, routerUsdtOut);
 
         uint256 keeperUsdtAfter = IERC20(TestConstants.USDT).balanceOf(syncKeeper);
         uint256 treasuryAfter = sys.keepersTreasury.claimable(syncKeeper, TestConstants.USDT);
