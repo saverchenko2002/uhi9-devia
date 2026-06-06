@@ -46,7 +46,6 @@ library PoolSyncLib {
         PriceScale memory scale
     ) internal view returns (QuoteToTargetPlan memory plan) {
         PythStructs.Price memory p = PoolPriceLib.getConfiguredPrice(oracle, poolId, cfg);
-        KeeperSyncLib.enforceOracleFreshness(uint64(p.publishTime), block.timestamp, cfg);
 
         uint256 targetPriceScaled = PoolPriceLib.priceScaledFromPyth(p, scale.priceDecimals);
         return _planQuoteSwap(poolManager, poolId, targetPriceScaled, scale);

@@ -27,7 +27,6 @@ library KeeperSyncLib {
     error InvalidDonateParam();
     error ImprovementTooSmall(uint256 got, uint256 minRequired);
     error OverwriteImprovementTooSmall(uint256 got, uint256 minRequired);
-    error OracleTooStale(uint256 ageSec, uint256 maxStalenessSec);
     error SyncSlippageTooHigh(uint256 gotBps, uint256 maxAllowedBps);
     error InvalidSpecifiedBps(uint16 bps);
     error MinRequiredExceedsSurplus(uint256 minRequired, uint256 surplus);
@@ -129,16 +128,6 @@ library KeeperSyncLib {
         if (improvement < cfg.minOverwriteImprovementBps) {
             revert OverwriteImprovementTooSmall(improvement, cfg.minOverwriteImprovementBps);
         }
-    }
-
-    function enforceOracleFreshness(uint256 oracleUpdateTs, uint256 nowTs, PoolConfig memory cfg)
-        internal
-        pure
-    {
-        if (nowTs <= oracleUpdateTs) return;
-
-        uint256 age = nowTs - oracleUpdateTs;
-        if (age > cfg.maxStalenessSec) revert OracleTooStale(age, cfg.maxStalenessSec);
     }
 
     function enforceSyncSlippage(

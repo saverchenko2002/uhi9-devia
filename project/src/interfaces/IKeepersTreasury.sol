@@ -35,4 +35,7 @@ interface IKeepersTreasury {
 
     function claimable(address keeper, address token) external view returns (uint256);
 
+    function setHook(address hook, bool allowed) external;
+    function setExecutor(address executor, bool allowed) external;
+
 }

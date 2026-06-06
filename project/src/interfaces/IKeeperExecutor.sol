@@ -18,10 +18,7 @@ interface IKeeperExecutor {
     }
 
     event FeedUpdateExecuted(
-        bytes32 indexed poolId,
-        address indexed keeper,
-        uint64 publishTime,
-        uint32 qualityBps
+        bytes32 indexed poolId, address indexed keeper, uint64 publishTime, uint32 qualityBps
     );
 
     event KeeperIntentExecuted(

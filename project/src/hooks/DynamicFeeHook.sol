@@ -18,6 +18,7 @@ import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {IPyth} from "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
 import {PythStructs} from "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
 import {IFeedKeepers} from "src/interfaces/IFeedKeepers.sol";
+import {IKeeperExecutor} from "src/interfaces/IKeeperExecutor.sol";
 import {IKeepersTreasury} from "src/interfaces/IKeepersTreasury.sol";
 import {IPoolConfigRegistry} from "src/interfaces/IPoolConfigRegistry.sol";
 import {ISyncKeepers} from "src/interfaces/ISyncKeepers.sol";
@@ -40,7 +41,6 @@ contract DynamicFeeHook is BaseHook {
     IKeepersTreasury public immutable keepersTreasury;
     IPyth public immutable oracle;
 
-    address public admin;
     address public keeperSyncExecutor;
 
     event PoolInitializedWithConfig(bytes32 indexed poolId, PoolConfig config);
@@ -53,38 +53,21 @@ contract DynamicFeeHook is BaseHook {
         bool feedShareEligible
     );
 
-    event KeeperSyncExecutorUpdated(address indexed executor);
-
-    error NotAdmin(address caller);
-
-    modifier onlyAdmin() {
-        if (msg.sender != admin) revert NotAdmin(msg.sender);
-        _;
-    }
-
     constructor(
         IPoolManager poolManager,
         IPoolConfigRegistry _poolConfigRegistry,
         IFeedKeepers _feedKeepers,
         ISyncKeepers _syncKeepers,
         IKeepersTreasury _keepersTreasury,
-        IPyth _oracle
+        IPyth _oracle,
+        IKeeperExecutor _keeperSyncExecutor
     ) BaseHook(poolManager) {
         poolConfigRegistry = _poolConfigRegistry;
         feedKeepers = _feedKeepers;
         syncKeepers = _syncKeepers;
         keepersTreasury = _keepersTreasury;
         oracle = _oracle;
-        admin = msg.sender;
-    }
-
-    function setKeeperSyncExecutor(address executor) external onlyAdmin {
-        keeperSyncExecutor = executor;
-        emit KeeperSyncExecutorUpdated(executor);
-    }
-
-    function transferAdmin(address newAdmin) external onlyAdmin {
-        admin = newAdmin;
+        keeperSyncExecutor = address(_keeperSyncExecutor);
     }
 
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {

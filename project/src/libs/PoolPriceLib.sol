@@ -31,7 +31,7 @@ library PoolPriceLib {
             unitAmount0,
             uint256(FixedPoint96.Q96) * uint256(FixedPoint96.Q96)
         );
-        return FullMath.mulDiv(amount1AtSqrt, 10 ** scale.priceDecimals, 10 ** scale.token1Decimals);
+        return FullMath.mulDiv(amount1AtSqrt, 1, 10 ** scale.token1Decimals);
     }
 
     function sqrtPriceX96FromPriceScaled(uint256 priceScaled, PriceScale memory scale)

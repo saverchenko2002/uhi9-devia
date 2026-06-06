@@ -10,6 +10,7 @@ interface IPoolConfigRegistry {
     event PoolConfigUpdated(bytes32 indexed poolId, PoolConfig config);
     event HookRoleUpdated(address indexed hook, bool allowed);
 
+    function setHook(address hook, bool allowed) external;
     function registerPool(bytes32 poolId, PoolKey calldata key, PoolConfig calldata cfg) external;
     function updatePoolConfig(bytes32 poolId, PoolConfig calldata cfg) external;
     function getPoolConfig(bytes32 poolId) external view returns (PoolConfig memory);

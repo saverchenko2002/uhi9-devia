@@ -27,4 +27,6 @@ interface ISyncKeepers {
         view
         returns (address keeper, uint32 qualityBps, uint32 windowEndBlock, bool isActive);
 
+    function setExecutor(address executor, bool allowed) external;
+
 }

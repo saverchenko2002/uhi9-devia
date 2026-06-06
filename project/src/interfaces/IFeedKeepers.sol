@@ -17,4 +17,6 @@ interface IFeedKeepers {
 
     function getLastPublishTime(bytes32 poolId) external view returns (uint64);
 
+    function setExecutor(address executor, bool allowed) external;
+
 }

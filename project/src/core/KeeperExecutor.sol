@@ -322,7 +322,6 @@ contract KeeperExecutor is IKeeperExecutor, BaseInit, IUnlockCallback {
         oracle.updatePriceFeeds{value: requiredFee}(updateData);
 
         PythStructs.Price memory p = PoolPriceLib.getConfiguredPrice(oracle, poolId, cfg);
-        KeeperSyncLib.enforceOracleFreshness(uint64(p.publishTime), block.timestamp, cfg);
 
         publishTime = uint64(p.publishTime);
         qualityBps = _qualityFromPublishTime(publishTime, cfg);
