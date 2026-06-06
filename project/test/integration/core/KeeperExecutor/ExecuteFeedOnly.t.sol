@@ -4,7 +4,7 @@ pragma solidity ^0.8.28;
 import {PythTestHelper} from "test/helpers/pyth/PythTestHelper.t.sol";
 import {
     ExecuteFeedOnlyTestBase
-} from "test/integration/core/KeeperExecutor/ExecuteFeedOnlyTestBase.t.sol";
+} from "test/integration/core/KeeperExecutor/base/ExecuteFeedOnlyTestBase.t.sol";
 
 contract KeeperExecutor_ExecuteFeedOnly_Test is ExecuteFeedOnlyTestBase {
 

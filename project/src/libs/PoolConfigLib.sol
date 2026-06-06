@@ -18,7 +18,7 @@ library PoolConfigLib {
     uint32 internal constant MAX_STALENESS_SEC = 180;
 
     // --- default keeper policy ---
-    uint16 internal constant DEFAULT_MIN_DONATE_BPS = 0;
+    uint16 internal constant DEFAULT_MIN_DONATE_BPS = 5000;
     uint16 internal constant DEFAULT_MAX_DONATE_BPS = BPS;
     uint16 internal constant DEFAULT_MIN_IMPROVEMENT_BPS = 5;
     uint16 internal constant DEFAULT_MIN_OVERWRITE_IMPROVEMENT_BPS = 3;

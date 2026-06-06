@@ -166,11 +166,13 @@ contract KeeperExecutor is IKeeperExecutor, BaseInit, IUnlockCallback {
         IERC20(intent.capitalToken)
             .safeTransferFrom(msg.sender, address(this), intent.capitalAmount);
 
-        _executePoolSwap(key, plan.zeroForOne, plan.amountIn);
+        uint256 amountOut = _executePoolSwap(key, plan.zeroForOne, plan.amountIn);
 
         if (hasExternal) {
             (address executor, bytes memory externalCalldata) =
                 KeeperSyncLib.decodeExternalSwap(ext.sync.externalSwap);
+
+            IERC20(expected.poolSwapTokenOut).forceApprove(executor, amountOut);
 
             (bool ok,) = executor.call(externalCalldata);
             if (!ok) revert ExecutionCallFailed();
@@ -384,8 +386,11 @@ contract KeeperExecutor is IKeeperExecutor, BaseInit, IUnlockCallback {
         return (arbProfit * cfg.minDonateBps) / PoolConfigLib.BPS;
     }
 
-    function _executePoolSwap(PoolKey memory key, bool zeroForOne, uint256 amountIn) internal {
-        poolManager.unlock(
+    function _executePoolSwap(PoolKey memory key, bool zeroForOne, uint256 amountIn)
+        internal
+        returns (uint256 amountOut)
+    {
+        bytes memory result = poolManager.unlock(
             abi.encode(
                 UNLOCK_POOL_SWAP,
                 abi.encode(
@@ -393,6 +398,7 @@ contract KeeperExecutor is IKeeperExecutor, BaseInit, IUnlockCallback {
                 )
             )
         );
+        amountOut = abi.decode(result, (uint256));
     }
 
     function _donateToPool(PoolKey memory key, address token, uint256 amount) internal {

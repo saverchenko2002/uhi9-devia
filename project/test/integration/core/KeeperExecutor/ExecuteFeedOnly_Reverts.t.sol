@@ -10,7 +10,7 @@ import {PoolConfigBuilder} from "test/helpers/config/PoolConfigBuilder.t.sol";
 import {PythTestHelper} from "test/helpers/pyth/PythTestHelper.t.sol";
 import {
     ExecuteFeedOnlyTestBase
-} from "test/integration/core/KeeperExecutor/ExecuteFeedOnlyTestBase.t.sol";
+} from "test/integration/core/KeeperExecutor/base/ExecuteFeedOnlyTestBase.t.sol";
 
 contract KeeperExecutor_ExecuteFeedOnly_Reverts_Test is ExecuteFeedOnlyTestBase {
 

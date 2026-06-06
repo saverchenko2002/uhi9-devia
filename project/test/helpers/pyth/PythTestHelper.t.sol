@@ -57,4 +57,19 @@ library PythTestHelper {
         return buildUpdatePayload(update);
     }
 
+    function seedEthUsdtPrice(MockPyth mock, uint64 publishTime) internal {
+        seedEthUsdtPriceAt(mock, defaultEthUsdtOraclePrice(), publishTime);
+    }
+
+    function seedEthUsdtPriceAt(MockPyth mock, int64 price, uint64 publishTime) internal {
+        bytes[] memory updates = new bytes[](1);
+        updates[0] = encodeSingleUpdate(
+            TestConstants.ETH_USD_FEED_ID,
+            price,
+            -int32(int8(TestConstants.PRICE_DECIMALS)),
+            publishTime
+        );
+        mock.updatePriceFeeds{value: TestConstants.PYTH_UPDATE_FEE}(updates);
+    }
+
 }
