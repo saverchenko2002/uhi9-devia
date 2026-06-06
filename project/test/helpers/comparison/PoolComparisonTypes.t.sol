@@ -14,12 +14,13 @@ library PoolComparisonTypes {
     struct SideReport {
         LpSnapshot initialLp;
         LpSnapshot finalLp;
-        int256 lpPnlUsdt;
         uint256 swapFeesToLpUsdt;
         uint256 arbProfitUsdt;
         uint256 poolDonationUsdt;
         uint256 keeperPayoutUsdt;
         uint256 treasuryClaimableUsdt;
+        uint256 treasuryClaimableWethUsdt;
+        uint256 treasuryTotalUsdt;
     }
 
 }

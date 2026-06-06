@@ -3,23 +3,23 @@ pragma solidity ^0.8.28;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
-import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
 
 import {IKeeperExecutor} from "src/interfaces/IKeeperExecutor.sol";
+import {PoolConfig} from "src/types/PoolConfigTypes.sol";
 import {PoolPriceLib} from "src/libs/PoolPriceLib.sol";
 import {PoolSyncLib} from "src/libs/PoolSyncLib.sol";
-import {PoolConfig} from "src/types/PoolConfigTypes.sol";
 import {PriceScale} from "src/types/PriceScaleTypes.sol";
-import {TestConstants} from "test/helpers/TestConstants.t.sol";
 import {PoolComparisonTypes} from "test/helpers/comparison/PoolComparisonTypes.t.sol";
 import {PoolDeployer} from "test/helpers/deploy/PoolDeployer.t.sol";
 import {FeeAccruedParser} from "test/helpers/fee/FeeAccruedParser.t.sol";
 import {PythTestHelper} from "test/helpers/pyth/PythTestHelper.t.sol";
+import {TestConstants} from "test/helpers/TestConstants.t.sol";
 import {PoolSwapRouter} from "test/helpers/swap/PoolSwapRouter.t.sol";
 import {
     ExecuteWithIntentTestBase
@@ -66,11 +66,7 @@ abstract contract PoolComparisonTestBase is ExecuteWithIntentTestBase {
             PoolDeployer.createPlainWethUsdtPool(poolManager, PoolDeployer.wethUsdtSqrtPriceX96());
     }
 
-    function _computeFullRangeLiquidity(PoolKey memory key)
-        internal
-        view
-        returns (uint128 liquidity)
-    {
+    function _computeFullRangeLiquidity(PoolKey memory key) internal view returns (uint128 liquidity) {
         liquidity = LiquidityAmounts.getLiquidityForAmounts(
             _sqrtPrice(key),
             TickMath.getSqrtPriceAtTick(TestConstants.syncTestFullRangeTickLower()),
@@ -118,19 +114,16 @@ abstract contract PoolComparisonTestBase is ExecuteWithIntentTestBase {
         _swapExactIn(key, false, SMALL_USDT_SWAP, swapper);
     }
 
-    function _runSmallSwapRoundWithFeeTracking(
-        PoolKey memory key,
-        bytes32 trackedPoolId,
-        address swapper
-    ) internal returns (FeeAccruedParser.Totals memory fees) {
+    function _runSmallSwapRoundWithFeeTracking(PoolKey memory key, bytes32 trackedPoolId, address swapper)
+        internal
+        returns (FeeAccruedParser.Totals memory fees)
+    {
         vm.recordLogs();
         _runSmallSwapRound(key, swapper);
         fees = FeeAccruedParser.accumulate(vm.getRecordedLogs(), trackedPoolId, fees);
     }
 
-    function _swapExactIn(PoolKey memory key, bool zeroForOne, uint256 amountIn, address payer)
-        internal
-    {
+    function _swapExactIn(PoolKey memory key, bool zeroForOne, uint256 amountIn, address payer) internal {
         (address tokenIn, address tokenOut) = zeroForOne
             ? (TestConstants.WETH, TestConstants.USDT)
             : (TestConstants.USDT, TestConstants.WETH);
@@ -140,7 +133,6 @@ abstract contract PoolComparisonTestBase is ExecuteWithIntentTestBase {
         IERC20(tokenIn).forceApprove(address(swapRouter), amountIn);
         swapRouter.swapExactIn(key, zeroForOne, amountIn, "", payer);
         vm.stopPrank();
-
     }
 
     function _executeHookedSyncArb()
@@ -164,22 +156,24 @@ abstract contract PoolComparisonTestBase is ExecuteWithIntentTestBase {
         );
 
         uint256 capitalUsdt = plan.amountIn;
-        uint256 wethOut = plan.amountOut;
-        uint256 routerUsdtOut =
-            TestConstants.usdtForWethAtPrice(wethOut, TestConstants.ETH_USDT_PRICE_SCALED_TARGET);
 
         deal(TestConstants.USDT, plainArb, capitalUsdt);
-        deal(TestConstants.USDT, address(mockRouter), routerUsdtOut);
 
         vm.startPrank(plainArb);
         IERC20(TestConstants.USDT).forceApprove(address(swapRouter), capitalUsdt);
-        swapRouter.swapExactIn(plainPoolKey, plan.zeroForOne, capitalUsdt, "", plainArb);
+        uint256 actualWethOut =
+            swapRouter.swapExactIn(plainPoolKey, plan.zeroForOne, capitalUsdt, "", plainArb);
 
-        IERC20(TestConstants.WETH).forceApprove(address(mockRouter), wethOut);
-        mockRouter.simulateArb(TestConstants.WETH, wethOut, TestConstants.USDT, routerUsdtOut);
+        uint256 routerUsdtOut = TestConstants.usdtForWethAtPrice(
+            actualWethOut, TestConstants.ETH_USDT_PRICE_SCALED_TARGET
+        );
+        deal(TestConstants.USDT, address(mockRouter), routerUsdtOut);
+
+        IERC20(TestConstants.WETH).forceApprove(address(mockRouter), actualWethOut);
+        mockRouter.simulateArb(TestConstants.WETH, actualWethOut, TestConstants.USDT, routerUsdtOut);
         vm.stopPrank();
 
-        profitUsdt = IERC20(TestConstants.USDT).balanceOf(plainArb);
+        profitUsdt = routerUsdtOut - capitalUsdt;
     }
 
     function _depositSnapshot(uint256 priceScaled)
@@ -236,15 +230,22 @@ abstract contract PoolComparisonTestBase is ExecuteWithIntentTestBase {
         return PoolPriceLib.priceScaledFromSqrtPriceX96(_sqrtPrice(key), scale);
     }
 
-    function _estimatePlainSwapFeesUsdt(uint256 priceScaled)
-        internal
-        pure
-        returns (uint256 feesUsdt)
-    {
+    function _estimatePlainSwapFeesUsdt(uint256 priceScaled) internal pure returns (uint256 feesUsdt) {
         uint256 wethLegValue = TestConstants.usdtForWethAtPrice(SMALL_WETH_SWAP, priceScaled);
-        uint256 perRound = (2 * wethLegValue + 2 * SMALL_USDT_SWAP)
-            * uint256(PoolDeployer.plainPoolStaticFee()) / 1_000_000;
+        uint256 perRound =
+            (2 * wethLegValue + 2 * SMALL_USDT_SWAP) * uint256(PoolDeployer.plainPoolStaticFee()) / 1_000_000;
         feesUsdt = perRound * 2;
+    }
+
+    function _syncKeeperTreasuryInUsdt(uint256 priceScaled)
+        internal
+        view
+        returns (uint256 claimableUsdt, uint256 claimableWethInUsdt, uint256 totalUsdt)
+    {
+        claimableUsdt = sys.keepersTreasury.claimable(syncKeeper, TestConstants.USDT);
+        uint256 claimableWeth = sys.keepersTreasury.claimable(syncKeeper, TestConstants.WETH);
+        claimableWethInUsdt = TestConstants.usdtForWethAtPrice(claimableWeth, priceScaled);
+        totalUsdt = claimableUsdt + claimableWethInUsdt;
     }
 
     function _sqrtPrice(PoolKey memory key) internal view returns (uint160 sqrtPriceX96) {
