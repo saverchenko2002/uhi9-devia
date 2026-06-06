@@ -53,6 +53,13 @@ contract DynamicFeeHook is BaseHook {
         bool feedShareEligible
     );
 
+    struct PublicSwapFeeAccrual {
+        PoolConfig cfg;
+        address feeToken;
+        uint256 totalFee;
+        uint64 pythPublishTime;
+    }
+
     constructor(
         IPoolManager poolManager,
         IPoolConfigRegistry _poolConfigRegistry,
@@ -138,48 +145,93 @@ contract DynamicFeeHook is BaseHook {
         bytes calldata hookData
     ) internal override returns (bytes4, int128) {
         bytes32 poolId = PoolId.unwrap(key.toId());
+
+        _emitSwapKeeperAttribution(poolId, key);
+
+        if (!_isKeeperSyncSwap(sender, hookData)) {
+            _accruePublicSwapFee(poolId, key, params, delta);
+        }
+
+        return (BaseHook.afterSwap.selector, 0);
+    }
+
+    function _emitSwapKeeperAttribution(bytes32 poolId, PoolKey calldata key) internal {
         PoolConfig memory cfg = poolConfigRegistry.getPoolConfig(poolId);
+        (,, uint64 pythPublishTime) = _readOracleContext(poolId, key, cfg);
 
-        (uint256 poolPrice, uint256 oraclePrice, uint64 pythPublishTime) =
-            _readOracleContext(poolId, key, cfg);
-
-        uint64 feedPublishTime = feedKeepers.getLastPublishTime(poolId);
-        address recordedProvider = feedKeepers.getLastProvider(poolId);
-
-        address feedProvider =
-            PoolFeeLib.resolveFeedProvider(pythPublishTime, feedPublishTime, recordedProvider);
+        (uint64 feedPublishTime, address feedProvider) = _readFeedAttribution(poolId, pythPublishTime);
 
         emit SwapKeeperAttribution(
             poolId, pythPublishTime, feedPublishTime, feedProvider, feedProvider != address(0)
         );
+    }
 
-        if (_isKeeperSyncSwap(sender, hookData)) {
-            return (BaseHook.afterSwap.selector, 0);
-        }
+    function _accruePublicSwapFee(
+        bytes32 poolId,
+        PoolKey calldata key,
+        SwapParams calldata params,
+        BalanceDelta delta
+    ) internal {
+        PublicSwapFeeAccrual memory accrual = _computePublicSwapFeeAccrual(poolId, key, params, delta);
+        if (accrual.totalFee == 0 || accrual.feeToken == address(0)) return;
 
-        (uint24 feeBps,,) = PoolFeeLib.computeFeeBpsFromPrices(
-            pythPublishTime, block.timestamp, poolPrice, oraclePrice, cfg
-        );
+        _depositPublicSwapFee(poolId, accrual);
+    }
 
-        (address feeToken, uint256 totalFee) = PoolFeeLib.computeSwapFee(key, params, delta, feeBps);
+    function _computePublicSwapFeeAccrual(
+        bytes32 poolId,
+        PoolKey calldata key,
+        SwapParams calldata params,
+        BalanceDelta delta
+    ) internal view returns (PublicSwapFeeAccrual memory accrual) {
+        accrual.cfg = poolConfigRegistry.getPoolConfig(poolId);
 
-        if (totalFee > 0 && feeToken != address(0)) {
-            (address syncKeeper,,, bool syncActive) = syncKeepers.getActiveSyncKeeper(poolId);
-            if (!syncActive) syncKeeper = address(0);
-
-            keepersTreasury.accrueSwapFee(
-                poolId,
-                feeToken,
-                totalFee,
-                feedProvider,
-                syncKeeper,
-                cfg.lpShareBps,
-                cfg.syncShareBps,
-                cfg.feedShareBps
+        uint64 pythPublishTime;
+        uint24 feeBps;
+        {
+            (uint256 poolPrice, uint256 oraclePrice, uint64 oraclePublishTime) =
+                _readOracleContext(poolId, key, accrual.cfg);
+            pythPublishTime = oraclePublishTime;
+            (feeBps,,) = PoolFeeLib.computeFeeBpsFromPrices(
+                pythPublishTime, block.timestamp, poolPrice, oraclePrice, accrual.cfg
             );
         }
 
-        return (BaseHook.afterSwap.selector, 0);
+        accrual.pythPublishTime = pythPublishTime;
+        (accrual.feeToken, accrual.totalFee) = PoolFeeLib.computeSwapFee(key, params, delta, feeBps);
+    }
+
+    function _depositPublicSwapFee(bytes32 poolId, PublicSwapFeeAccrual memory accrual) internal {
+        (, address feedProvider) = _readFeedAttribution(poolId, accrual.pythPublishTime);
+        address syncKeeper = _activeSyncKeeper(poolId);
+
+        keepersTreasury.accrueSwapFee(
+            poolId,
+            accrual.feeToken,
+            accrual.totalFee,
+            feedProvider,
+            syncKeeper,
+            accrual.cfg.lpShareBps,
+            accrual.cfg.syncShareBps,
+            accrual.cfg.feedShareBps
+        );
+    }
+
+    function _readFeedAttribution(bytes32 poolId, uint64 pythPublishTime)
+        internal
+        view
+        returns (uint64 feedPublishTime, address feedProvider)
+    {
+        feedPublishTime = feedKeepers.getLastPublishTime(poolId);
+        feedProvider = PoolFeeLib.resolveFeedProvider(
+            pythPublishTime, feedPublishTime, feedKeepers.getLastProvider(poolId)
+        );
+    }
+
+    function _activeSyncKeeper(bytes32 poolId) internal view returns (address syncKeeper) {
+        bool syncActive;
+        (syncKeeper,,, syncActive) = syncKeepers.getActiveSyncKeeper(poolId);
+        if (!syncActive) syncKeeper = address(0);
     }
 
     function _isKeeperSyncSwap(address sender, bytes calldata hookData)

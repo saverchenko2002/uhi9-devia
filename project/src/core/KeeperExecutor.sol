@@ -60,6 +60,18 @@ contract KeeperExecutor is IKeeperExecutor, BaseInit, IUnlockCallback {
         uint256 amount1;
     }
 
+    struct SyncExecutionContext {
+        bytes32 poolId;
+        KeeperExtension ext;
+        PoolConfig cfg;
+        PoolKey key;
+        PriceScale scale;
+        PoolSyncLib.QuoteToTargetPlan plan;
+        SyncPreview expected;
+        uint256 preDev;
+        uint256 profitBaseline;
+    }
+
     error ExecutionCallFailed();
     error InsufficientUpdateFee(uint256 required, uint256 provided);
     error SyncActionRequired();
@@ -132,90 +144,14 @@ contract KeeperExecutor is IKeeperExecutor, BaseInit, IUnlockCallback {
             uint256 capitalReturned
         )
     {
-        bytes32 poolId = intent.poolId;
-        KeeperExtension memory ext = intent.extension.decode();
-        PoolConfig memory cfg = poolConfigRegistry.getPoolConfig(poolId);
-        PoolKey memory key = poolConfigRegistry.getPoolKey(poolId);
-        PriceScale memory scale = PoolPriceLib.priceScaleFromPoolKey(key, ext.sync.priceDecimals);
-
-        KeeperSyncLib.validateDonatePolicy(ext, cfg);
-
-        if (!ext.hasSync()) revert SyncActionRequired();
-
-        uint256 targetPriceScaled = ext.sync.targetPriceScaled;
-        PoolSyncLib.QuoteToTargetPlan memory plan =
-            PoolSyncLib.planQuoteSwapToTarget(poolId, poolManager, targetPriceScaled, cfg, scale);
-
-        SyncPreview memory expected = _previewFromPlan(key, plan, poolId, targetPriceScaled, scale);
-
-        if (intent.capitalToken != expected.poolSwapTokenIn) {
-            revert CapitalTokenMismatch(expected.poolSwapTokenIn, intent.capitalToken);
-        }
-        _validateProfitToken(key, intent.profitToken);
-
-        if (intent.capitalAmount < plan.amountIn) {
-            revert InsufficientCapital(plan.amountIn, intent.capitalAmount);
-        }
-
-        uint256 preDev = expected.poolDeviationBps;
-
-        uint256 profitBaseline = IERC20(intent.profitToken).balanceOf(address(this));
-
-        IERC20(intent.capitalToken)
-            .safeTransferFrom(msg.sender, address(this), intent.capitalAmount);
-
-        uint256 amountOut = _executePoolSwap(key, plan.zeroForOne, plan.amountIn);
-
-        (address executor, bytes memory externalCalldata) =
-            KeeperSyncLib.decodeExternalSwap(ext.sync.externalSwap);
-
-        IERC20(expected.poolSwapTokenOut).forceApprove(executor, amountOut);
-
-        (bool ok,) = executor.call(externalCalldata);
-        if (!ok) revert ExecutionCallFailed();
-
-        if (intent.capitalToken == intent.profitToken) {
-            uint256 profitAfter = IERC20(intent.profitToken).balanceOf(address(this));
-            if (profitAfter <= profitBaseline + intent.capitalAmount) {
-                revert NonPositiveArbProfit(profitAfter - profitBaseline - intent.capitalAmount);
-            }
-            actualProfit = profitAfter - profitBaseline - intent.capitalAmount;
-        } else {
-            uint256 profitAfter = IERC20(intent.profitToken).balanceOf(address(this));
-            if (profitAfter <= profitBaseline) {
-                revert NonPositiveArbProfit(profitAfter - profitBaseline);
-            }
-            actualProfit = profitAfter - profitBaseline;
-        }
-
-        KeeperSyncLib.enforceSyncSlippage(intent.expectedProfit, actualProfit, cfg);
-
-        uint256 minRequiredDonation = _minRequiredDonation(actualProfit, cfg);
-        donationAmount = KeeperSyncLib.computeDonationAmount(
-            ext.traits.donateMode, ext.traits.donateParam, actualProfit, minRequiredDonation
-        );
-        keeperPayout = actualProfit > donationAmount ? actualProfit - donationAmount : 0;
-
-        if (donationAmount > 0) {
-            _donateToPool(key, intent.profitToken, donationAmount);
-        }
-
-        if (keeperPayout > 0) {
-            _payoutKeeper(intent.profitToken, keeperPayout, ext, msg.sender);
-        }
-
-        uint256 postDev =
-            PoolSyncLib.poolDeviationFromTargetBps(poolId, poolManager, targetPriceScaled, scale);
-        KeeperSyncLib.enforceMinImprovement(preDev, postDev, cfg);
-
-        _recordSync(poolId, msg.sender, preDev, postDev);
-
-        capitalReturned = _returnAllBalances(
-            msg.sender, intent.capitalToken, intent.profitToken, expected.poolSwapTokenOut
-        );
+        SyncExecutionContext memory ctx = _prepareSyncContext(intent);
+        _pullCapital(intent, ctx);
+        actualProfit = _runArbAndMeasureProfit(intent, ctx);
+        (donationAmount, keeperPayout) = _splitAndPayout(intent, ctx, actualProfit);
+        capitalReturned = _finalizeSync(intent, ctx);
 
         emit KeeperIntentExecuted(
-            poolId,
+            ctx.poolId,
             msg.sender,
             intent.capitalAmount,
             capitalReturned,
@@ -261,6 +197,118 @@ contract KeeperExecutor is IKeeperExecutor, BaseInit, IUnlockCallback {
         }
 
         revert UnknownUnlockAction(action);
+    }
+
+    function _prepareSyncContext(KeeperIntent calldata intent)
+        internal
+        view
+        returns (SyncExecutionContext memory ctx)
+    {
+        ctx.poolId = intent.poolId;
+        ctx.ext = intent.extension.decode();
+        ctx.cfg = poolConfigRegistry.getPoolConfig(ctx.poolId);
+        ctx.key = poolConfigRegistry.getPoolKey(ctx.poolId);
+        ctx.scale = PoolPriceLib.priceScaleFromPoolKey(ctx.key, ctx.ext.sync.priceDecimals);
+
+        KeeperSyncLib.validateDonatePolicy(ctx.ext, ctx.cfg);
+        if (!ctx.ext.hasSync()) revert SyncActionRequired();
+
+        uint256 targetPriceScaled = ctx.ext.sync.targetPriceScaled;
+        ctx.plan = PoolSyncLib.planQuoteSwapToTarget(
+            ctx.poolId, poolManager, targetPriceScaled, ctx.cfg, ctx.scale
+        );
+        ctx.expected = _previewFromPlan(ctx.key, ctx.plan, ctx.poolId, targetPriceScaled, ctx.scale);
+
+        if (intent.capitalToken != ctx.expected.poolSwapTokenIn) {
+            revert CapitalTokenMismatch(ctx.expected.poolSwapTokenIn, intent.capitalToken);
+        }
+        _validateProfitToken(ctx.key, intent.profitToken);
+
+        if (intent.capitalAmount < ctx.plan.amountIn) {
+            revert InsufficientCapital(ctx.plan.amountIn, intent.capitalAmount);
+        }
+
+        ctx.preDev = ctx.expected.poolDeviationBps;
+    }
+
+    function _pullCapital(KeeperIntent calldata intent, SyncExecutionContext memory ctx) internal {
+        ctx.profitBaseline = IERC20(intent.profitToken).balanceOf(address(this));
+        IERC20(intent.capitalToken).safeTransferFrom(msg.sender, address(this), intent.capitalAmount);
+    }
+
+    function _runArbAndMeasureProfit(KeeperIntent calldata intent, SyncExecutionContext memory ctx)
+        internal
+        returns (uint256 actualProfit)
+    {
+        uint256 amountOut =
+            _executePoolSwap(ctx.key, ctx.plan.zeroForOne, ctx.plan.amountIn);
+
+        (address executor, bytes memory externalCalldata) =
+            KeeperSyncLib.decodeExternalSwap(ctx.ext.sync.externalSwap);
+
+        IERC20(ctx.expected.poolSwapTokenOut).forceApprove(executor, amountOut);
+
+        (bool ok,) = executor.call(externalCalldata);
+        if (!ok) revert ExecutionCallFailed();
+
+        actualProfit = _measureProfit(intent, ctx);
+        KeeperSyncLib.enforceSyncSlippage(intent.expectedProfit, actualProfit, ctx.cfg);
+    }
+
+    function _measureProfit(KeeperIntent calldata intent, SyncExecutionContext memory ctx)
+        internal
+        view
+        returns (uint256 actualProfit)
+    {
+        uint256 profitAfter = IERC20(intent.profitToken).balanceOf(address(this));
+
+        if (intent.capitalToken == intent.profitToken) {
+            if (profitAfter <= ctx.profitBaseline + intent.capitalAmount) {
+                revert NonPositiveArbProfit(profitAfter - ctx.profitBaseline - intent.capitalAmount);
+            }
+            actualProfit = profitAfter - ctx.profitBaseline - intent.capitalAmount;
+        } else {
+            if (profitAfter <= ctx.profitBaseline) {
+                revert NonPositiveArbProfit(profitAfter - ctx.profitBaseline);
+            }
+            actualProfit = profitAfter - ctx.profitBaseline;
+        }
+    }
+
+    function _splitAndPayout(
+        KeeperIntent calldata intent,
+        SyncExecutionContext memory ctx,
+        uint256 actualProfit
+    ) internal returns (uint256 donationAmount, uint256 keeperPayout) {
+        uint256 minRequiredDonation = _minRequiredDonation(actualProfit, ctx.cfg);
+        donationAmount = KeeperSyncLib.computeDonationAmount(
+            ctx.ext.traits.donateMode, ctx.ext.traits.donateParam, actualProfit, minRequiredDonation
+        );
+        keeperPayout = actualProfit > donationAmount ? actualProfit - donationAmount : 0;
+
+        if (donationAmount > 0) {
+            _donateToPool(ctx.key, intent.profitToken, donationAmount);
+        }
+
+        if (keeperPayout > 0) {
+            _payoutKeeper(intent.profitToken, keeperPayout, ctx.ext, msg.sender);
+        }
+    }
+
+    function _finalizeSync(KeeperIntent calldata intent, SyncExecutionContext memory ctx)
+        internal
+        returns (uint256 capitalReturned)
+    {
+        uint256 postDev = PoolSyncLib.poolDeviationFromTargetBps(
+            ctx.poolId, poolManager, ctx.ext.sync.targetPriceScaled, ctx.scale
+        );
+        KeeperSyncLib.enforceMinImprovement(ctx.preDev, postDev, ctx.cfg);
+
+        _recordSync(ctx.poolId, msg.sender, ctx.preDev, postDev);
+
+        capitalReturned = _returnAllBalances(
+            msg.sender, intent.capitalToken, intent.profitToken, ctx.expected.poolSwapTokenOut
+        );
     }
 
     function _fillPreview(
