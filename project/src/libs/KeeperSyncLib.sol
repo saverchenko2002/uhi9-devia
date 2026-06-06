@@ -30,6 +30,9 @@ library KeeperSyncLib {
     error SyncSlippageTooHigh(uint256 gotBps, uint256 maxAllowedBps);
     error InvalidSpecifiedBps(uint16 bps);
     error MinRequiredExceedsSurplus(uint256 minRequired, uint256 surplus);
+    error ExternalSettlementRequired();
+
+    uint256 internal constant MIN_EXTERNAL_SWAP_LENGTH = 20;
 
     // --- extension ---
 
@@ -75,7 +78,7 @@ library KeeperSyncLib {
         pure
         returns (address executor, bytes memory externalCalldata)
     {
-        if (packed.length < 20) revert ExecutionDataTooShort();
+        if (packed.length < MIN_EXTERNAL_SWAP_LENGTH) revert ExecutionDataTooShort();
 
         assembly ("memory-safe") {
             executor := shr(96, mload(add(packed, 32)))
@@ -190,6 +193,9 @@ library KeeperSyncLib {
 
         if (hasFeedUpdate(ext) && ext.feed.payload.length == 0) revert EmptyFeedPayload();
         if (hasSync(ext) && ext.sync.targetPriceScaled == 0) revert MissingSyncTarget();
+        if (hasSync(ext) && ext.sync.externalSwap.length < MIN_EXTERNAL_SWAP_LENGTH) {
+            revert ExternalSettlementRequired();
+        }
 
         if (ext.traits.donateMode == DonateMode.SPECIFIED_BPS && ext.traits.donateParam > BPS) {
             revert DonateParamOutOfRange();

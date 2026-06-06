@@ -51,4 +51,13 @@ contract KeeperSyncLib_InvalidExtension_Reverts_Test is Test {
         wrapper.decode(ext);
     }
 
+    function test_revertsOnMissingExternalSettlement() public {
+        bytes memory ext = KeeperExtensionBuilder.encodeSyncWithExternal(
+            1, 8, "", DonateMode.MIN_ONLY, 0, PayoutMode.WRAPPED, address(0)
+        );
+
+        vm.expectRevert(KeeperSyncLib.ExternalSettlementRequired.selector);
+        wrapper.decode(ext);
+    }
+
 }

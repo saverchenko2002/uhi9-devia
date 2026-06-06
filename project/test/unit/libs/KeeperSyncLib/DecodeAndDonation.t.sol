@@ -16,10 +16,12 @@ contract DecodeAndDonation_Test is Test {
     }
 
     function test_decodesSyncExtension() public view {
+        bytes memory externalSwap = abi.encodePacked(address(0xBEEF));
+
         bytes memory ext = KeeperExtensionBuilder.encodeSyncWithExternal(
             TestConstants.ETH_USDT_PRICE_SCALED,
             TestConstants.PRICE_DECIMALS,
-            "",
+            externalSwap,
             DonateMode.MIN_ONLY,
             0,
             PayoutMode.WRAPPED,

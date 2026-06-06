@@ -61,6 +61,7 @@ library PythTestHelper {
         seedEthUsdtPriceAt(mock, defaultEthUsdtOraclePrice(), publishTime);
     }
 
+    /// @dev Requires `publishTime` strictly greater than the feed's current publishTime.
     function seedEthUsdtPriceAt(MockPyth mock, int64 price, uint64 publishTime) internal {
         bytes[] memory updates = new bytes[](1);
         updates[0] = encodeSingleUpdate(

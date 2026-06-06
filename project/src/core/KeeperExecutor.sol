@@ -70,7 +70,6 @@ contract KeeperExecutor is IKeeperExecutor, BaseInit, IUnlockCallback {
     error CapitalTokenMismatch(address expected, address got);
     error InsufficientCapital(uint256 need, uint256 got);
     error NonPositiveArbProfit(uint256 profit);
-    error ExternalSettlementRequired();
     error EmptyFeedPayload();
 
     constructor(
@@ -159,7 +158,6 @@ contract KeeperExecutor is IKeeperExecutor, BaseInit, IUnlockCallback {
         }
 
         uint256 preDev = expected.poolDeviationBps;
-        bool hasExternal = ext.sync.externalSwap.length >= 20;
 
         uint256 profitBaseline = IERC20(intent.profitToken).balanceOf(address(this));
 
@@ -168,49 +166,42 @@ contract KeeperExecutor is IKeeperExecutor, BaseInit, IUnlockCallback {
 
         uint256 amountOut = _executePoolSwap(key, plan.zeroForOne, plan.amountIn);
 
-        if (hasExternal) {
-            (address executor, bytes memory externalCalldata) =
-                KeeperSyncLib.decodeExternalSwap(ext.sync.externalSwap);
+        (address executor, bytes memory externalCalldata) =
+            KeeperSyncLib.decodeExternalSwap(ext.sync.externalSwap);
 
-            IERC20(expected.poolSwapTokenOut).forceApprove(executor, amountOut);
+        IERC20(expected.poolSwapTokenOut).forceApprove(executor, amountOut);
 
-            (bool ok,) = executor.call(externalCalldata);
-            if (!ok) revert ExecutionCallFailed();
+        (bool ok,) = executor.call(externalCalldata);
+        if (!ok) revert ExecutionCallFailed();
 
-            if (intent.capitalToken == intent.profitToken) {
-                uint256 profitAfter = IERC20(intent.profitToken).balanceOf(address(this));
-                if (profitAfter <= profitBaseline + intent.capitalAmount) {
-                    revert NonPositiveArbProfit(profitAfter - profitBaseline - intent.capitalAmount);
-                }
-                actualProfit = profitAfter - profitBaseline - intent.capitalAmount;
-            } else {
-                uint256 profitAfter = IERC20(intent.profitToken).balanceOf(address(this));
-                if (profitAfter <= profitBaseline) {
-                    revert NonPositiveArbProfit(profitAfter - profitBaseline);
-                }
-                actualProfit = profitAfter - profitBaseline;
+        if (intent.capitalToken == intent.profitToken) {
+            uint256 profitAfter = IERC20(intent.profitToken).balanceOf(address(this));
+            if (profitAfter <= profitBaseline + intent.capitalAmount) {
+                revert NonPositiveArbProfit(profitAfter - profitBaseline - intent.capitalAmount);
             }
-
-            KeeperSyncLib.enforceSyncSlippage(intent.expectedProfit, actualProfit, cfg);
-
-            uint256 minRequiredDonation = _minRequiredDonation(actualProfit, cfg);
-            donationAmount = KeeperSyncLib.computeDonationAmount(
-                ext.traits.donateMode, ext.traits.donateParam, actualProfit, minRequiredDonation
-            );
-            keeperPayout = actualProfit > donationAmount ? actualProfit - donationAmount : 0;
-
-            if (donationAmount > 0) {
-                _donateToPool(key, intent.profitToken, donationAmount);
-            }
-
-            if (keeperPayout > 0) {
-                _payoutKeeper(intent.profitToken, keeperPayout, ext, msg.sender);
-            }
+            actualProfit = profitAfter - profitBaseline - intent.capitalAmount;
         } else {
-            if (intent.expectedProfit > 0) revert ExternalSettlementRequired();
-            actualProfit = 0;
-            donationAmount = 0;
-            keeperPayout = 0;
+            uint256 profitAfter = IERC20(intent.profitToken).balanceOf(address(this));
+            if (profitAfter <= profitBaseline) {
+                revert NonPositiveArbProfit(profitAfter - profitBaseline);
+            }
+            actualProfit = profitAfter - profitBaseline;
+        }
+
+        KeeperSyncLib.enforceSyncSlippage(intent.expectedProfit, actualProfit, cfg);
+
+        uint256 minRequiredDonation = _minRequiredDonation(actualProfit, cfg);
+        donationAmount = KeeperSyncLib.computeDonationAmount(
+            ext.traits.donateMode, ext.traits.donateParam, actualProfit, minRequiredDonation
+        );
+        keeperPayout = actualProfit > donationAmount ? actualProfit - donationAmount : 0;
+
+        if (donationAmount > 0) {
+            _donateToPool(key, intent.profitToken, donationAmount);
+        }
+
+        if (keeperPayout > 0) {
+            _payoutKeeper(intent.profitToken, keeperPayout, ext, msg.sender);
         }
 
         uint256 postDev =
