@@ -42,8 +42,13 @@ library FeeAccruedParser {
             if (logs[i].topics[0] != FEE_ACCRUED_TOPIC) continue;
             if (logs[i].topics[1] != poolId) continue;
 
-            (address token, uint256 totalFee, uint256 lpShare, uint256 syncShare, uint256 feedShare) =
-                abi.decode(logs[i].data, (address, uint256, uint256, uint256, uint256));
+            (
+                address token,
+                uint256 totalFee,
+                uint256 lpShare,
+                uint256 syncShare,
+                uint256 feedShare
+            ) = abi.decode(logs[i].data, (address, uint256, uint256, uint256, uint256));
 
             if (token == TestConstants.WETH) {
                 updated.wethTotalFee += totalFee;

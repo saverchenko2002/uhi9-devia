@@ -7,6 +7,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {BaseInit} from "src/base/BaseInit.sol";
 import {IKeepersTreasury} from "src/interfaces/IKeepersTreasury.sol";
 import {PoolConfigLib} from "src/libs/PoolConfigLib.sol";
+import {PoolFeeLib} from "src/libs/PoolFeeLib.sol";
 
 contract KeepersTreasury is IKeepersTreasury, BaseInit {
 
@@ -62,19 +63,31 @@ contract KeepersTreasury is IKeepersTreasury, BaseInit {
             revert InvalidShareSplit();
         }
 
-        uint256 syncAmount = (totalFee * syncShareBps) / PoolConfigLib.BPS;
-        uint256 feedAmount = (totalFee * feedShareBps) / PoolConfigLib.BPS;
-        uint256 lpAmount = totalFee - syncAmount - feedAmount;
+        PoolFeeLib.SwapFeeSplit memory split = PoolFeeLib.splitSwapFee(
+            totalFee, feedKeeper, syncKeeper, lpShareBps, syncShareBps, feedShareBps
+        );
 
-        if (syncKeeper != address(0) && syncAmount > 0) {
-            claimable[syncKeeper][token] += syncAmount;
+        uint256 keeperTotal = split.syncAmount + split.feedAmount;
+        if (keeperTotal > 0) {
+            IERC20(token).safeTransferFrom(msg.sender, address(this), keeperTotal);
         }
-        if (feedKeeper != address(0) && feedAmount > 0) {
-            claimable[feedKeeper][token] += feedAmount;
+
+        if (syncKeeper != address(0) && split.syncAmount > 0) {
+            claimable[syncKeeper][token] += split.syncAmount;
+        }
+        if (feedKeeper != address(0) && split.feedAmount > 0) {
+            claimable[feedKeeper][token] += split.feedAmount;
         }
 
         emit FeeAccrued(
-            poolId, token, totalFee, lpAmount, syncAmount, feedAmount, syncKeeper, feedKeeper
+            poolId,
+            token,
+            totalFee,
+            split.lpAmount,
+            split.syncAmount,
+            split.feedAmount,
+            syncKeeper,
+            feedKeeper
         );
     }
 

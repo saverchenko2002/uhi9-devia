@@ -29,7 +29,10 @@ library PoolDeployer {
     error HookAddressMismatch();
 
     function dynamicFeeHookFlags() internal pure returns (uint160) {
-        return uint160(Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG);
+        return uint160(
+            Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
+                | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
+        );
     }
 
     function encodeDynamicFeeHookConstructorArgs(
@@ -153,7 +156,7 @@ library PoolDeployer {
         poolManager.initialize(key, sqrtPriceX96);
     }
 
-    /// @dev (matches `PoolConfigLib.BASE_FEE_BPS`), no hook.
+    /// @dev Plain WETH/USDT pool: static 0.30% fee (matches `PoolConfigLib.BASE_FEE_BPS`), no hook.
     function createPlainWethUsdtPool(IPoolManager poolManager, uint160 sqrtPriceX96)
         internal
         returns (PoolKey memory key, bytes32 poolId)

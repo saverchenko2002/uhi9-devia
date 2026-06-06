@@ -16,7 +16,9 @@ interface IKeepersTreasury {
 
     event KeeperDeposit(address indexed keeper, address indexed token, uint256 amount);
 
-    /// @notice Вызывается hook после свапа: делит fee по cfg (LP — учёт, sync/feed — claimable).
+    /// @notice Вызывается hook после свапа: делит fee по cfg (LP — pool fee, sync/feed — claimable).
+    /// @dev Hook переводит sync+feed доли через `transferFrom`. Если eligible keeper отсутствует,
+    ///      его доля остаётся LP (через `beforeSwap` lp fee) и в event `feedAmount`/`syncAmount` = 0.
     function accrueSwapFee(
         bytes32 poolId,
         address token,

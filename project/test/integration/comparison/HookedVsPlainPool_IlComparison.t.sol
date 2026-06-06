@@ -14,56 +14,80 @@ import {PoolComparisonTestBase} from "test/integration/comparison/base/PoolCompa
 ///         2) plain static-fee v4 pool with manual arb
 contract HookedVsPlainPool_IlComparison_Test is PoolComparisonTestBase {
 
+    struct ComparisonArbPhase {
+        uint256 hookedDonation;
+        uint256 hookedKeeperPayout;
+        uint256 plainArbProfit;
+    }
+
+    struct ComparisonReports {
+        PoolComparisonTypes.SideReport plain;
+        PoolComparisonTypes.SideReport hooked;
+        FeeAccruedParser.ValuedTotals hookedSwapFees;
+    }
+
     function test_compareDistribution_hookedVsPlainPool() public {
-        uint256 startPrice = TestConstants.ETH_USDT_PRICE_SCALED;
-        uint256 finalPrice = TestConstants.ETH_USDT_PRICE_SCALED_TARGET;
+        _assertPoolsStartAtPrice(TestConstants.ETH_USDT_PRICE_SCALED);
 
-        assertApproxEqAbs(_poolPriceScaled(poolKey), startPrice, 1e8, "hooked pool start price");
-        assertApproxEqAbs(_poolPriceScaled(plainPoolKey), startPrice, 1e8, "plain pool start price");
-
-        // Step 3 — small two-way swaps while oracle still matches the pool (~3000).
-        FeeAccruedParser.Totals memory hookedFeesRound1 =
-            _runSmallSwapRoundWithFeeTracking(poolKey, poolId, trader);
-        _runSmallSwapRound(plainPoolKey, trader);
-
-        // Step 4 — oracle moves to 3100; pools stay near 3000 until arb/sync.
+        FeeAccruedParser.Totals memory hookedFeesRound1 = _round1Swaps();
         _seedOracleAtTarget();
 
-        // Step 5 — hooked pool: keeper sync via executeWithIntent.
-        (uint256 hookedDonation, uint256 hookedKeeperPayout,) = _executeHookedSyncArbWithReport();
+        ComparisonArbPhase memory arb = _runArbPhase();
+        FeeAccruedParser.Totals memory hookedFeesRound2 = _round2Swaps();
 
-        // Step 6 — plain pool: pool swap + external mock DEX at 3100.
-        uint256 plainArbProfit = _executePlainPoolArb();
-        console2.log("--- Plain pool manual arb ---");
-        console2.log("arbProfit (USDT, net of pool capital)", plainArbProfit);
+        ComparisonReports memory reports = _buildReports(arb, hookedFeesRound1, hookedFeesRound2);
+        _logReports(reports);
+        _assertComparisonOutcome(arb);
+    }
 
-        // Step 7 — another round of small swaps (pool now near 3100, oracle at 3100).
-        FeeAccruedParser.Totals memory hookedFeesRound2 =
-            _runSmallSwapRoundWithFeeTracking(poolKey, poolId, trader);
+    function _assertPoolsStartAtPrice(uint256 priceScaled) internal view {
+        assertApproxEqAbs(_poolPriceScaled(poolKey), priceScaled, 1e8, "hooked pool start price");
+        assertApproxEqAbs(_poolPriceScaled(plainPoolKey), priceScaled, 1e8, "plain pool start price");
+    }
+
+    function _round1Swaps() internal returns (FeeAccruedParser.Totals memory fees) {
+        fees = _runSmallSwapRoundWithFeeTracking(poolKey, poolId, trader);
         _runSmallSwapRound(plainPoolKey, trader);
+    }
+
+    function _runArbPhase() internal returns (ComparisonArbPhase memory arb) {
+        (arb.hookedDonation, arb.hookedKeeperPayout,) = _executeHookedSyncArbWithReport();
+        arb.plainArbProfit = _executePlainPoolArb();
+
+        console2.log("--- Plain pool manual arb ---");
+        console2.log("arbProfit (USDT, net of pool capital)", arb.plainArbProfit);
+    }
+
+    function _round2Swaps() internal returns (FeeAccruedParser.Totals memory fees) {
+        fees = _runSmallSwapRoundWithFeeTracking(poolKey, poolId, trader);
+        _runSmallSwapRound(plainPoolKey, trader);
+    }
+
+    function _buildReports(
+        ComparisonArbPhase memory arb,
+        FeeAccruedParser.Totals memory hookedFeesRound1,
+        FeeAccruedParser.Totals memory hookedFeesRound2
+    ) internal returns (ComparisonReports memory reports) {
+        uint256 finalPrice = TestConstants.ETH_USDT_PRICE_SCALED_TARGET;
 
         FeeAccruedParser.Totals memory hookedSwapFees =
             FeeAccruedParser.merge(hookedFeesRound1, hookedFeesRound2);
-        FeeAccruedParser.ValuedTotals memory hookedFeesValued =
-            FeeAccruedParser.valueInUsdt(hookedSwapFees, finalPrice);
-        uint256 plainSwapFeesEstimate = _estimatePlainSwapFeesUsdt(finalPrice);
+        reports.hookedSwapFees = FeeAccruedParser.valueInUsdt(hookedSwapFees, finalPrice);
 
-        // Step 8 — burn LP and assemble final distribution reports.
         PoolComparisonTypes.LpSnapshot memory plainFinalLp = _burnLpPosition(plainPoolKey, plainLpLiquidity);
         plainFinalLp.valueUsdt = _valueAtPrice(plainFinalLp.weth, plainFinalLp.usdt, finalPrice);
 
-        PoolComparisonTypes.LpSnapshot memory hookedFinalLp =
-            _burnLpPosition(poolKey, hookedLpLiquidity);
-        hookedFinalLp.valueUsdt =
-            _valueAtPrice(hookedFinalLp.weth, hookedFinalLp.usdt, finalPrice);
+        PoolComparisonTypes.LpSnapshot memory hookedFinalLp = _burnLpPosition(poolKey, hookedLpLiquidity);
+        hookedFinalLp.valueUsdt = _valueAtPrice(hookedFinalLp.weth, hookedFinalLp.usdt, finalPrice);
 
-        PoolComparisonTypes.SideReport memory plainReport = PoolComparisonTypes.SideReport({
-            initialLp: PoolComparisonTypes.LpSnapshot({
-                weth: LP_WETH, usdt: _lpUsdtAmount(), valueUsdt: 0
-            }),
+        PoolComparisonTypes.LpSnapshot memory initialLp =
+            PoolComparisonTypes.LpSnapshot({weth: LP_WETH, usdt: _lpUsdtAmount(), valueUsdt: 0});
+
+        reports.plain = PoolComparisonTypes.SideReport({
+            initialLp: initialLp,
             finalLp: plainFinalLp,
-            swapFeesToLpUsdt: plainSwapFeesEstimate,
-            arbProfitUsdt: plainArbProfit,
+            swapFeesToLpUsdt: _estimatePlainSwapFeesUsdt(finalPrice),
+            arbProfitUsdt: arb.plainArbProfit,
             poolDonationUsdt: 0,
             keeperPayoutUsdt: 0,
             treasuryClaimableUsdt: 0,
@@ -71,34 +95,35 @@ contract HookedVsPlainPool_IlComparison_Test is PoolComparisonTestBase {
             treasuryTotalUsdt: 0
         });
 
-        (
-            uint256 treasuryUsdt,
-            uint256 treasuryWethUsdt,
-            uint256 treasuryTotalUsdt
-        ) = _syncKeeperTreasuryInUsdt(finalPrice);
+        (uint256 treasuryUsdt, uint256 treasuryWethUsdt, uint256 treasuryTotalUsdt) =
+            _syncKeeperTreasuryInUsdt(finalPrice);
 
-        PoolComparisonTypes.SideReport memory hookedReport = PoolComparisonTypes.SideReport({
-            initialLp: PoolComparisonTypes.LpSnapshot({
-                weth: LP_WETH, usdt: _lpUsdtAmount(), valueUsdt: 0
-            }),
+        reports.hooked = PoolComparisonTypes.SideReport({
+            initialLp: initialLp,
             finalLp: hookedFinalLp,
-            swapFeesToLpUsdt: hookedFeesValued.lpShareUsdt,
-            arbProfitUsdt: hookedKeeperPayout,
-            poolDonationUsdt: hookedDonation,
-            keeperPayoutUsdt: hookedKeeperPayout,
+            swapFeesToLpUsdt: reports.hookedSwapFees.lpShareUsdt,
+            arbProfitUsdt: arb.hookedKeeperPayout,
+            poolDonationUsdt: arb.hookedDonation,
+            keeperPayoutUsdt: arb.hookedKeeperPayout,
             treasuryClaimableUsdt: treasuryUsdt,
             treasuryClaimableWethUsdt: treasuryWethUsdt,
             treasuryTotalUsdt: treasuryTotalUsdt
         });
+    }
 
-        _logPlainReport(plainReport);
-        _logHookedReport(hookedReport, hookedFeesValued);
+    function _logReports(ComparisonReports memory reports) internal view {
+        _logPlainReport(reports.plain);
+        _logHookedReport(reports.hooked, reports.hookedSwapFees);
+    }
 
-        assertGt(plainArbProfit, 0, "plain arb profit");
-        assertGt(hookedKeeperPayout, 0, "hooked keeper payout");
-        assertGt(hookedDonation, 0, "hooked pool donation");
-        assertApproxEqAbs(_poolPriceScaled(poolKey), finalPrice, 5e8, "hooked pool synced");
-        assertApproxEqAbs(_poolPriceScaled(plainPoolKey), finalPrice, 5e8, "plain pool synced");
+    function _assertComparisonOutcome(ComparisonArbPhase memory arb) internal view {
+        uint256 finalPrice = TestConstants.ETH_USDT_PRICE_SCALED_TARGET;
+
+        assertGt(arb.plainArbProfit, 0, "plain arb profit");
+        assertGt(arb.hookedKeeperPayout, 0, "hooked keeper payout");
+        assertGt(arb.hookedDonation, 0, "hooked pool donation");
+        assertApproxEqAbs(_poolPriceScaled(poolKey), finalPrice, 5e7, "hooked pool synced");
+        assertApproxEqAbs(_poolPriceScaled(plainPoolKey), finalPrice, 5e7, "plain pool synced");
     }
 
     function _executeHookedSyncArbWithReport()

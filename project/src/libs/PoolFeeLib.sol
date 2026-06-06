@@ -15,6 +15,12 @@ library PoolFeeLib {
 
     uint256 internal constant PIPS_DENOMINATOR = 1_000_000;
 
+    struct SwapFeeSplit {
+        uint256 lpAmount;
+        uint256 syncAmount;
+        uint256 feedAmount;
+    }
+
     error ZeroOraclePrice();
 
     // --- dynamic fee (hook beforeSwap) ---
@@ -117,6 +123,89 @@ library PoolFeeLib {
             return address(0);
         }
         return recordedProvider;
+    }
+
+    // --- keeper fee split (treasury / hook) ---
+
+    function effectiveLpShareBps(
+        address feedKeeper,
+        address syncKeeper,
+        uint16 lpShareBps,
+        uint16 syncShareBps,
+        uint16 feedShareBps
+    ) internal pure returns (uint16 effectiveLpBps) {
+        effectiveLpBps = lpShareBps;
+        if (feedKeeper == address(0)) effectiveLpBps += feedShareBps;
+        if (syncKeeper == address(0)) effectiveLpBps += syncShareBps;
+    }
+
+    function splitSwapFee(
+        uint256 totalFee,
+        address feedKeeper,
+        address syncKeeper,
+        uint16 lpShareBps,
+        uint16 syncShareBps,
+        uint16 feedShareBps
+    ) internal pure returns (SwapFeeSplit memory split) {
+        split.syncAmount = (totalFee * syncShareBps) / PoolConfigLib.BPS;
+        split.feedAmount = (totalFee * feedShareBps) / PoolConfigLib.BPS;
+        split.lpAmount = totalFee - split.syncAmount - split.feedAmount;
+
+        if (feedKeeper == address(0) && split.feedAmount > 0) {
+            split.lpAmount += split.feedAmount;
+            split.feedAmount = 0;
+        }
+        if (syncKeeper == address(0) && split.syncAmount > 0) {
+            split.lpAmount += split.syncAmount;
+            split.syncAmount = 0;
+        }
+    }
+
+    function lpFeeBpsFromEffectiveShare(uint24 feeBps, uint16 effectiveLpShareBps)
+        internal
+        pure
+        returns (uint24)
+    {
+        return uint24((uint256(feeBps) * uint256(effectiveLpShareBps)) / PoolConfigLib.BPS);
+    }
+
+    /// @dev Keeper take is on the swap unspecified leg (afterSwapReturnDelta); convert from input fee token.
+    function computeKeeperTakeUnspecified(
+        PoolKey calldata key,
+        SwapParams calldata params,
+        BalanceDelta delta,
+        uint256 keeperTotalInFeeToken,
+        address feeToken
+    ) internal pure returns (uint256 keeperTake, Currency takeCurrency) {
+        bool specifiedTokenIs0 = (params.amountSpecified < 0 == params.zeroForOne);
+        takeCurrency = specifiedTokenIs0 ? key.currency1 : key.currency0;
+
+        int128 unspecifiedDelta = specifiedTokenIs0
+            ? BalanceDeltaLibrary.amount1(delta)
+            : BalanceDeltaLibrary.amount0(delta);
+        uint256 unspecifiedAmount = unspecifiedDelta < 0
+            ? uint256(uint128(-unspecifiedDelta))
+            : uint256(uint128(unspecifiedDelta));
+
+        address takeToken = Currency.unwrap(takeCurrency);
+        if (keeperTotalInFeeToken == 0 || unspecifiedAmount == 0) return (0, takeCurrency);
+
+        if (takeToken == feeToken) return (keeperTotalInFeeToken, takeCurrency);
+
+        uint256 referenceAmount;
+        if (params.amountSpecified < 0) {
+            referenceAmount = uint256(-params.amountSpecified);
+        } else {
+            int128 specifiedDelta = specifiedTokenIs0
+                ? BalanceDeltaLibrary.amount0(delta)
+                : BalanceDeltaLibrary.amount1(delta);
+            referenceAmount = specifiedDelta < 0
+                ? uint256(uint128(-specifiedDelta))
+                : uint256(uint128(specifiedDelta));
+        }
+        if (referenceAmount == 0) return (0, takeCurrency);
+
+        keeperTake = FullMath.mulDiv(keeperTotalInFeeToken, unspecifiedAmount, referenceAmount);
     }
 
 }

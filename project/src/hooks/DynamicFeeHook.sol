@@ -3,14 +3,19 @@ pragma solidity ^0.8.28;
 
 import {BaseHook} from "@v4-hooks/src/base/BaseHook.sol";
 
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
+import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {
     BeforeSwapDelta,
     BeforeSwapDeltaLibrary
 } from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -33,6 +38,8 @@ import {PriceScale} from "src/types/PriceScaleTypes.sol";
 contract DynamicFeeHook is BaseHook {
 
     using PoolIdLibrary for PoolKey;
+    using SafeCast for uint256;
+    using SafeERC20 for IERC20;
     using StateLibrary for IPoolManager;
 
     IPoolConfigRegistry public immutable poolConfigRegistry;
@@ -58,6 +65,13 @@ contract DynamicFeeHook is BaseHook {
         address feeToken;
         uint256 totalFee;
         uint64 pythPublishTime;
+    }
+
+    struct SwapFeeContext {
+        bytes32 poolId;
+        PublicSwapFeeAccrual accrual;
+        address feedProvider;
+        address syncKeeper;
     }
 
     constructor(
@@ -90,7 +104,7 @@ contract DynamicFeeHook is BaseHook {
             beforeDonate: false,
             afterDonate: false,
             beforeSwapReturnDelta: false,
-            afterSwapReturnDelta: false,
+            afterSwapReturnDelta: true,
             afterAddLiquidityReturnDelta: false,
             afterRemoveLiquidityReturnDelta: false
         });
@@ -134,6 +148,13 @@ contract DynamicFeeHook is BaseHook {
             oracleTs, block.timestamp, poolPrice, oraclePrice, cfg
         );
 
+        (, address feedProvider) = _readFeedAttribution(poolId, oracleTs);
+        address syncKeeper = _activeSyncKeeper(poolId);
+        uint16 effectiveLpBps = PoolFeeLib.effectiveLpShareBps(
+            feedProvider, syncKeeper, cfg.lpShareBps, cfg.syncShareBps, cfg.feedShareBps
+        );
+        feeBps = PoolFeeLib.lpFeeBpsFromEffectiveShare(feeBps, effectiveLpBps);
+
         return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, feeBps);
     }
 
@@ -145,14 +166,15 @@ contract DynamicFeeHook is BaseHook {
         bytes calldata hookData
     ) internal override returns (bytes4, int128) {
         bytes32 poolId = PoolId.unwrap(key.toId());
+        int128 hookDelta;
 
         _emitSwapKeeperAttribution(poolId, key);
 
         if (!_isKeeperSyncSwap(sender, hookData)) {
-            _accruePublicSwapFee(poolId, key, params, delta);
+            hookDelta = _accruePublicSwapFee(poolId, key, params, delta);
         }
 
-        return (BaseHook.afterSwap.selector, 0);
+        return (BaseHook.afterSwap.selector, hookDelta);
     }
 
     function _emitSwapKeeperAttribution(bytes32 poolId, PoolKey calldata key) internal {
@@ -172,12 +194,89 @@ contract DynamicFeeHook is BaseHook {
         PoolKey calldata key,
         SwapParams calldata params,
         BalanceDelta delta
-    ) internal {
+    ) internal returns (int128 hookDelta) {
         PublicSwapFeeAccrual memory accrual =
             _computePublicSwapFeeAccrual(poolId, key, params, delta);
-        if (accrual.totalFee == 0 || accrual.feeToken == address(0)) return;
+        if (accrual.totalFee == 0 || accrual.feeToken == address(0)) return 0;
 
-        _depositPublicSwapFee(poolId, accrual);
+        return _depositPublicSwapFee(_swapFeeContext(poolId, accrual), key, params, delta);
+    }
+
+    function _swapFeeContext(bytes32 poolId, PublicSwapFeeAccrual memory accrual)
+        internal
+        view
+        returns (SwapFeeContext memory ctx)
+    {
+        ctx.poolId = poolId;
+        ctx.accrual = accrual;
+        (, ctx.feedProvider) = _readFeedAttribution(poolId, accrual.pythPublishTime);
+        ctx.syncKeeper = _activeSyncKeeper(poolId);
+    }
+
+    function _treasuryAccrue(SwapFeeContext memory ctx, address token, uint256 totalFee) internal {
+        PoolConfig memory cfg = ctx.accrual.cfg;
+        keepersTreasury.accrueSwapFee(
+            ctx.poolId,
+            token,
+            totalFee,
+            ctx.feedProvider,
+            ctx.syncKeeper,
+            cfg.lpShareBps,
+            cfg.syncShareBps,
+            cfg.feedShareBps
+        );
+    }
+
+    function _depositPublicSwapFee(
+        SwapFeeContext memory ctx,
+        PoolKey calldata key,
+        SwapParams calldata params,
+        BalanceDelta delta
+    ) internal returns (int128 hookDelta) {
+        PublicSwapFeeAccrual memory accrual = ctx.accrual;
+
+        PoolFeeLib.SwapFeeSplit memory split = PoolFeeLib.splitSwapFee(
+            accrual.totalFee,
+            ctx.feedProvider,
+            ctx.syncKeeper,
+            accrual.cfg.lpShareBps,
+            accrual.cfg.syncShareBps,
+            accrual.cfg.feedShareBps
+        );
+
+        uint256 keeperTotalInFeeToken = split.syncAmount + split.feedAmount;
+        if (keeperTotalInFeeToken == 0) {
+            _treasuryAccrue(ctx, accrual.feeToken, accrual.totalFee);
+            return 0;
+        }
+
+        (uint256 keeperTake, Currency takeCurrency) = PoolFeeLib.computeKeeperTakeUnspecified(
+            key, params, delta, keeperTotalInFeeToken, accrual.feeToken
+        );
+        if (keeperTake == 0) {
+            _treasuryAccrue(ctx, accrual.feeToken, accrual.totalFee);
+            return 0;
+        }
+
+        return _takeKeeperFeeToTreasury(ctx, split, keeperTotalInFeeToken, keeperTake, takeCurrency);
+    }
+
+    function _takeKeeperFeeToTreasury(
+        SwapFeeContext memory ctx,
+        PoolFeeLib.SwapFeeSplit memory split,
+        uint256 keeperTotalInFeeToken,
+        uint256 keeperTake,
+        Currency takeCurrency
+    ) internal returns (int128 hookDelta) {
+        address takeToken = Currency.unwrap(takeCurrency);
+        uint256 totalFeeForAccrue =
+            keeperTake + FullMath.mulDiv(split.lpAmount, keeperTake, keeperTotalInFeeToken);
+
+        poolManager.take(takeCurrency, address(this), keeperTake);
+        IERC20(takeToken).forceApprove(address(keepersTreasury), keeperTake);
+        _treasuryAccrue(ctx, takeToken, totalFeeForAccrue);
+
+        return keeperTake.toInt128();
     }
 
     function _computePublicSwapFeeAccrual(
@@ -201,22 +300,6 @@ contract DynamicFeeHook is BaseHook {
 
         accrual.pythPublishTime = pythPublishTime;
         (accrual.feeToken, accrual.totalFee) = PoolFeeLib.computeSwapFee(key, params, delta, feeBps);
-    }
-
-    function _depositPublicSwapFee(bytes32 poolId, PublicSwapFeeAccrual memory accrual) internal {
-        (, address feedProvider) = _readFeedAttribution(poolId, accrual.pythPublishTime);
-        address syncKeeper = _activeSyncKeeper(poolId);
-
-        keepersTreasury.accrueSwapFee(
-            poolId,
-            accrual.feeToken,
-            accrual.totalFee,
-            feedProvider,
-            syncKeeper,
-            accrual.cfg.lpShareBps,
-            accrual.cfg.syncShareBps,
-            accrual.cfg.feedShareBps
-        );
     }
 
     function _readFeedAttribution(bytes32 poolId, uint64 pythPublishTime)
