@@ -4,8 +4,8 @@ pragma solidity ^0.8.28;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-import {KeeperExecutor} from "src/core/KeeperExecutor.sol";
 import {IKeeperExecutor} from "src/interfaces/IKeeperExecutor.sol";
+import {KeeperExecutorErrors} from "src/errors/KeeperExecutorErrors.sol";
 import {KeeperSyncLib} from "src/libs/KeeperSyncLib.sol";
 import {DonateMode, PayoutMode} from "src/types/KeeperExtensionTypes.sol";
 import {PoolConfig} from "src/types/PoolConfigTypes.sol";
@@ -70,7 +70,7 @@ contract KeeperExecutor_ExecuteWithIntent_Reverts_Test is ExecuteWithIntentTestB
         deal(TestConstants.USDT, syncKeeper, intent.capitalAmount);
         vm.startPrank(syncKeeper);
         IERC20(intent.capitalToken).forceApprove(address(sys.executor), intent.capitalAmount);
-        vm.expectRevert(KeeperExecutor.SyncActionRequired.selector);
+        vm.expectRevert(KeeperExecutorErrors.SyncActionRequired.selector);
         sys.executor.executeWithIntent(intent);
         vm.stopPrank();
     }
@@ -90,7 +90,7 @@ contract KeeperExecutor_ExecuteWithIntent_Reverts_Test is ExecuteWithIntentTestB
         IERC20(intent.capitalToken).forceApprove(address(sys.executor), intent.capitalAmount);
         vm.expectRevert(
             abi.encodeWithSelector(
-                KeeperExecutor.InsufficientCapital.selector, capitalAmount, capitalAmount - 1
+                KeeperExecutorErrors.InsufficientCapital.selector, capitalAmount, capitalAmount - 1
             )
         );
         sys.executor.executeWithIntent(intent);
@@ -111,7 +111,7 @@ contract KeeperExecutor_ExecuteWithIntent_Reverts_Test is ExecuteWithIntentTestB
         IERC20(TestConstants.WETH).forceApprove(address(sys.executor), intent.capitalAmount);
         vm.expectRevert(
             abi.encodeWithSelector(
-                KeeperExecutor.CapitalTokenMismatch.selector,
+                KeeperExecutorErrors.CapitalTokenMismatch.selector,
                 preview.poolSwapTokenIn,
                 TestConstants.WETH
             )
@@ -133,7 +133,7 @@ contract KeeperExecutor_ExecuteWithIntent_Reverts_Test is ExecuteWithIntentTestB
         vm.startPrank(syncKeeper);
         IERC20(intent.capitalToken).forceApprove(address(sys.executor), capitalAmount);
         vm.expectRevert(
-            abi.encodeWithSelector(KeeperExecutor.NonPositiveArbProfit.selector, uint256(0))
+            abi.encodeWithSelector(KeeperExecutorErrors.NonPositiveArbProfit.selector, uint256(0))
         );
         sys.executor.executeWithIntent(intent);
         vm.stopPrank();
@@ -199,7 +199,7 @@ contract KeeperExecutor_ExecuteWithIntent_Reverts_Test is ExecuteWithIntentTestB
         deal(TestConstants.USDT, syncKeeper, capitalAmount);
         vm.startPrank(syncKeeper);
         IERC20(intent.capitalToken).forceApprove(address(sys.executor), capitalAmount);
-        vm.expectRevert(KeeperExecutor.ExecutionCallFailed.selector);
+        vm.expectRevert(KeeperExecutorErrors.ExecutionCallFailed.selector);
         sys.executor.executeWithIntent(intent);
         vm.stopPrank();
     }
@@ -246,7 +246,7 @@ contract KeeperExecutor_ExecuteWithIntent_Reverts_Test is ExecuteWithIntentTestB
         IERC20(intent.capitalToken).forceApprove(address(sys.executor), intent.capitalAmount);
         vm.expectRevert(
             abi.encodeWithSelector(
-                KeeperExecutor.TokenNotInPool.selector,
+                KeeperExecutorErrors.TokenNotInPool.selector,
                 badProfitToken,
                 TestConstants.WETH,
                 TestConstants.USDT

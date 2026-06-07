@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 import {PythErrors} from "@pythnetwork/pyth-sdk-solidity/PythErrors.sol";
 
-import {KeeperExecutor} from "src/core/KeeperExecutor.sol";
+import {KeeperExecutorErrors} from "src/errors/KeeperExecutorErrors.sol";
 import {PoolConfigLib} from "src/libs/PoolConfigLib.sol";
 import {PoolConfig} from "src/types/PoolConfigTypes.sol";
 import {PoolConfigBuilder} from "test/helpers/config/PoolConfigBuilder.t.sol";
@@ -19,7 +19,7 @@ contract KeeperExecutor_ExecuteFeedOnly_Reverts_Test is ExecuteFeedOnlyTestBase 
 
         vm.deal(keeper, 1 ether);
         vm.prank(keeper);
-        vm.expectRevert(KeeperExecutor.EmptyFeedPayload.selector);
+        vm.expectRevert(KeeperExecutorErrors.EmptyFeedPayload.selector);
         sys.executor.executeFeedOnly{value: 1 wei}(poolId, "");
     }
 
@@ -58,7 +58,7 @@ contract KeeperExecutor_ExecuteFeedOnly_Reverts_Test is ExecuteFeedOnlyTestBase 
         vm.prank(keeper);
         vm.expectRevert(
             abi.encodeWithSelector(
-                KeeperExecutor.InsufficientUpdateFee.selector, uint256(1), uint256(0)
+                KeeperExecutorErrors.InsufficientUpdateFee.selector, uint256(1), uint256(0)
             )
         );
         sys.executor.executeFeedOnly{value: 0}(poolId, feedPayload);

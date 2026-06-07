@@ -1,0 +1,30 @@
+{
+  "forkBlock": 25257218,
+  "oraclePriceScaled": "300000000000",
+  "weth": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+  "usdt": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+  "actors": {
+    "owner": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+    "lp": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+    "swapper": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+    "syncKeeper": "0x90F79bf6EB2c4f870365E785982E1f101E93b906",
+    "plainArb": "0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65"
+  },
+  "addresses": {
+    "poolManager": "0x000000000004444c5dc75cB358380D2e3dE08A90",
+    "hookedCurrency0": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+    "hookedCurrency1": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+    "hookedPoolId": "0xfd7143b28fe13f4a703aa5671be4c751fe22fef62697fe8b70b00ac6c48284c5",
+    "plainPoolId": "0xdbc39ab6fe6642e11b3cd4d99a0b3863331d164c436d1e1915076a0a153b3f75",
+    "mockPyth": "0x3aa3dce3a62fd37ce28c1120d34a970b371cb69e",
+    "registry": "0xe5e56701f7e241cc8c598615c4fbf6ef1ecf27b6",
+    "feedKeepers": "0xe4621d0e194f6e6169e39b3ef1b300de9fbf5d95",
+    "syncKeepers": "0xeda71b4bcf8ccd0b6eccc021bb3c8c2ad29ba21e",
+    "keepersTreasury": "0xb22e25fd4ac4e913384c02209b73b2fd256f511a",
+    "executor": "0xb8fa00f68457e3234f22502a3a554fe6a36ce259",
+    "dynamicFeeHook": "0xab3b9eb85ad5e44d84d4133f91f9bbea773e10c4",
+    "liqRouter": "0xf5c1078628a8da58feb58e750c77912619a3a014",
+    "swapRouter": "0x6c4718009200f486217dd3a371390f592fbbe025",
+    "mockRouter": "0x198a9fb08a3a376a5fa7f8cd622f7d5411699480"
+  }
+}
