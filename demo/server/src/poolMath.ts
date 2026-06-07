@@ -10,6 +10,10 @@ function mulDiv(a: bigint, b: bigint, denominator: bigint): bigint {
   return (a * b) / denominator;
 }
 
+function mulDivRoundingUp(a: bigint, b: bigint, denominator: bigint): bigint {
+  return (a * b + denominator - 1n) / denominator;
+}
+
 /** token1 per token0 at PRICE_DECIMALS (matches PoolPriceLib). */
 export function priceScaledFromSqrtPriceX96(sqrtPriceX96: bigint): bigint {
   if (sqrtPriceX96 === 0n) return 0n;
@@ -53,6 +57,36 @@ export function amountsForPoolLiquidity(
   }
 
   return { wethWei, usdtRaw };
+}
+
+export function estimateExactInAmountOut(
+  sqrtPriceX96: bigint,
+  liquidity: bigint,
+  amountIn: bigint,
+  zeroForOne: boolean,
+  feePips: number,
+): bigint | null {
+  if (liquidity === 0n || sqrtPriceX96 === 0n || amountIn <= 0n) return null;
+
+  const fee = (amountIn * BigInt(feePips) + 999_999n) / 1_000_000n;
+  const amountInLessFee = amountIn - fee;
+  if (amountInLessFee <= 0n) return null;
+
+  if (zeroForOne) {
+    const product = amountInLessFee * sqrtPriceX96;
+    const denominator = liquidity * Q96 + product;
+    if (denominator === 0n) return null;
+    const sqrtNext = (liquidity * Q96 * sqrtPriceX96) / denominator;
+    if (sqrtNext >= sqrtPriceX96) return null;
+    return mulDiv(liquidity, sqrtPriceX96 - sqrtNext, Q96);
+  }
+
+  // USDT → WETH (token1 in): sqrtPrice += ceil(amountIn * Q96 / liquidity)
+  const quotient = mulDivRoundingUp(amountInLessFee, Q96, liquidity);
+  if (quotient === 0n) return null;
+  const sqrtNext = sqrtPriceX96 + quotient;
+  if (sqrtNext <= sqrtPriceX96) return null;
+  return mulDiv(mulDiv(liquidity << 96n, sqrtNext - sqrtPriceX96, sqrtNext), 1n, sqrtPriceX96);
 }
 
 export function tvlUsdtFromAmounts(

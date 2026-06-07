@@ -48,6 +48,9 @@ export async function syncCurrentBlockFromChain(): Promise<number> {
   return n;
 }
 
+/** Simulated mainnet block time — dynamic fee staleness uses `block.timestamp`. */
+export const DEMO_BLOCK_TIME_SEC = 12;
+
 /** Disable auto-mine so each demo operation advances exactly one block. */
 export async function configureDemoMining(enabled = false): Promise<void> {
   await publicClient().request({ method: "evm_setAutomine", params: [enabled] });
@@ -56,6 +59,10 @@ export async function configureDemoMining(enabled = false): Promise<void> {
 export async function mineBlocks(count = 1): Promise<number> {
   const client = publicClient();
   for (let i = 0; i < count; i++) {
+    await client.request({
+      method: "evm_increaseTime",
+      params: [DEMO_BLOCK_TIME_SEC],
+    });
     await client.request({ method: "evm_mine", params: [] });
   }
   const n = Number(await client.getBlockNumber());

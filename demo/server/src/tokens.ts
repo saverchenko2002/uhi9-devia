@@ -45,7 +45,7 @@ const ERC20_TRANSFER_ABI = [
   },
 ] as const;
 
-function createAnvilTestClient() {
+export function createAnvilTestClient() {
   return createTestClient({
     chain: foundry,
     mode: "anvil",
@@ -61,14 +61,80 @@ function createAnvilPublicClient() {
 
 /** USDT proxy `balances` mapping slot on mainnet fork. */
 const USDT_BALANCES_SLOT = 2n;
+/** WETH9 `balanceOf` mapping slot. */
+const WETH_BALANCES_SLOT = 3n;
+const USDT_ALLOWANCE_SLOT = 3n;
+const WETH_ALLOWANCE_SLOT = 4n;
 
-function usdtBalanceStorageSlot(holder: Address): Hex {
+function erc20BalanceStorageSlot(holder: Address, mappingSlot: bigint): Hex {
   return keccak256(
     encodeAbiParameters(
       [{ type: "address" }, { type: "uint256" }],
-      [holder, USDT_BALANCES_SLOT],
+      [holder, mappingSlot],
     ),
   );
+}
+
+function erc20AllowanceStorageSlot(owner: Address, spender: Address, mappingSlot: bigint): Hex {
+  const inner = keccak256(
+    encodeAbiParameters(
+      [{ type: "address" }, { type: "uint256" }],
+      [owner, mappingSlot],
+    ),
+  );
+  return keccak256(
+    encodeAbiParameters(
+      [{ type: "address" }, { type: "bytes32" }],
+      [spender, inner],
+    ),
+  );
+}
+
+async function readErc20StorageBalance(token: Address, holder: Address, mappingSlot: bigint): Promise<bigint> {
+  const publicClient = createAnvilPublicClient();
+  const slot = erc20BalanceStorageSlot(holder, mappingSlot);
+  const raw = await publicClient.getStorageAt({ address: token, slot });
+  return raw ? BigInt(raw) : 0n;
+}
+
+async function writeErc20StorageBalance(
+  token: Address,
+  holder: Address,
+  mappingSlot: bigint,
+  next: bigint,
+): Promise<void> {
+  const testClient = createAnvilTestClient();
+  await testClient.setStorageAt({
+    address: token,
+    index: erc20BalanceStorageSlot(holder, mappingSlot),
+    value: pad(toHex(next)),
+  });
+}
+
+/** Credit WETH via storage write — no on-chain tx (safe for quotes with automine off). */
+export async function fundWethDirect(recipient: Address, amount: bigint): Promise<void> {
+  const current = await readErc20StorageBalance(WETH, recipient, WETH_BALANCES_SLOT);
+  await writeErc20StorageBalance(WETH, recipient, WETH_BALANCES_SLOT, current + amount);
+}
+
+/** Set ERC20 allowance via storage — no on-chain tx. */
+export async function setAllowanceDirect(
+  token: Address,
+  owner: Address,
+  spender: Address,
+  amount: bigint,
+): Promise<void> {
+  const mappingSlot = token.toLowerCase() === USDT.toLowerCase() ? USDT_ALLOWANCE_SLOT : WETH_ALLOWANCE_SLOT;
+  const testClient = createAnvilTestClient();
+  await testClient.setStorageAt({
+    address: token,
+    index: erc20AllowanceStorageSlot(owner, spender, mappingSlot),
+    value: pad(toHex(amount)),
+  });
+}
+
+function usdtBalanceStorageSlot(holder: Address): Hex {
+  return erc20BalanceStorageSlot(holder, USDT_BALANCES_SLOT);
 }
 
 const BALANCE_OF_ABI = [

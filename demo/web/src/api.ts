@@ -52,6 +52,66 @@ export type FeedSyncResult = {
   priceScaled: string;
 };
 
+export type FeeSplitPreview = {
+  pool: "hooked" | "plain";
+  feeBps: number;
+  feeToken: "WETH" | "USDT";
+  totalFeeRaw: string;
+  lpShareRaw: string;
+  syncShareRaw: string;
+  feedShareRaw: string;
+  totalFeeUsdt: number;
+  lpShareUsdt: number;
+  syncShareUsdt: number;
+  feedShareUsdt: number;
+  syncKeeperActive: boolean;
+  feedKeeperActive: boolean;
+  syncKeeper: string | null;
+  feedKeeper: string | null;
+};
+
+export type SwapAmountOutPreview = {
+  pool: "hooked" | "plain";
+  amountOutRaw: string;
+  amountOut: number;
+  outputToken: "WETH" | "USDT";
+};
+
+export type AccumulatedPoolFees = {
+  totalFeeUsdt: number;
+  lpShareUsdt: number;
+  syncShareUsdt: number;
+  feedShareUsdt: number;
+  swapCount: number;
+};
+
+export type AccumulatedFees = {
+  plain: AccumulatedPoolFees;
+  hooked: AccumulatedPoolFees;
+};
+
+export type SwapFeePreview = {
+  zeroForOne: boolean;
+  amountIn: string;
+  amountInRaw: string;
+  inputToken: "WETH" | "USDT";
+  outputToken: "WETH" | "USDT";
+  plain: FeeSplitPreview | null;
+  hooked: FeeSplitPreview | null;
+  plainAmountOut: SwapAmountOutPreview | null;
+  hookedAmountOut: SwapAmountOutPreview | null;
+  plainTotalFeeUsdt: number;
+  hookedTotalFeeUsdt: number;
+};
+
+export type SwapResult = {
+  pool: "hooked" | "plain";
+  txHash: string;
+  amountIn: string;
+  zeroForOne: boolean;
+  fees: FeeSplitPreview;
+};
+
 export type DemoState = {
   deployment: Deployment;
   anvilReady?: boolean;
@@ -61,6 +121,8 @@ export type DemoState = {
   blocks?: BlockState;
   liquiditySeeded: { hooked: boolean; plain: boolean };
   lastLiquiditySeed: LiquiditySeedResult[];
+  lastSwap?: SwapResult[];
+  accumulatedFees?: AccumulatedFees;
   pools?: { hooked: PoolSnapshot; plain: PoolSnapshot };
 };
 
@@ -125,6 +187,37 @@ export async function setOraclePrice(priceScaled: string): Promise<DemoState> {
   return normalizeState(json);
 }
 
+export async function previewSwapFees(body: {
+  pool: PoolTarget;
+  zeroForOne: boolean;
+  amountIn: string;
+}): Promise<SwapFeePreview> {
+  const res = await fetch(`${API}/api/swap/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = await res.json();
+  if (!json.ok) throw new Error(json.error ?? "swap preview failed");
+  return json.preview as SwapFeePreview;
+}
+
+export async function executeSwap(body: {
+  actorId?: ActorId;
+  pool: PoolTarget;
+  zeroForOne: boolean;
+  amountIn: string;
+}): Promise<DemoState> {
+  const res = await fetch(`${API}/api/swap/execute`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = await res.json();
+  if (!json.ok) throw new Error(json.error ?? "swap failed");
+  return normalizeState(json);
+}
+
 export function priceScaledToUsdtPerEth(scaled: string): number {
   return Number(scaled) / 1e8;
 }
@@ -146,6 +239,11 @@ function normalizeState(json: Record<string, unknown>): DemoState {
       plain: false,
     },
     lastLiquiditySeed: (json.lastLiquiditySeed as LiquiditySeedResult[]) ?? [],
+    lastSwap: (json.lastSwap as SwapResult[]) ?? [],
+    accumulatedFees: (json.accumulatedFees as AccumulatedFees) ?? {
+      plain: { totalFeeUsdt: 0, lpShareUsdt: 0, syncShareUsdt: 0, feedShareUsdt: 0, swapCount: 0 },
+      hooked: { totalFeeUsdt: 0, lpShareUsdt: 0, syncShareUsdt: 0, feedShareUsdt: 0, swapCount: 0 },
+    },
     pools: json.pools as DemoState["pools"],
   };
 }

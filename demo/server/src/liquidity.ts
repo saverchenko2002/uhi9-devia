@@ -1,9 +1,7 @@
 import {
   createPublicClient,
   createWalletClient,
-  encodePacked,
   http,
-  keccak256,
   parseEther,
   type Address,
   type Hex,
@@ -12,19 +10,16 @@ import { foundry } from "viem/chains";
 import type { Deployment } from "./deploy.js";
 import { fundUsdtDirect, fundWeth } from "./tokens.js";
 import {
-  DYNAMIC_FEE_FLAG,
   fullRangeTickLower,
   fullRangeTickUpper,
-  PLAIN_POOL_FEE,
   POOL_MANAGER,
-  TICK_SPACING,
   USDT,
   WETH,
 } from "./constants.js";
 import { ANVIL_RPC, getActorAccount, type ActorId } from "./accounts.js";
 import { sendContractTx } from "./tx.js";
 
-const POOLS_SLOT = "0x0000000000000000000000000000000000000000000000000000000000000006" as Hex;
+import { buildPoolKey, poolStateSlot } from "./poolKeys.js";
 
 const ERC20_ABI = [
   {
@@ -156,10 +151,6 @@ async function logActorBalances(
   });
 }
 
-function poolStateSlot(poolId: Hex): Hex {
-  return keccak256(encodePacked(["bytes32", "bytes32"], [poolId, POOLS_SLOT]));
-}
-
 async function readSqrtPriceX96(
   client: ReturnType<typeof createPublicClient>,
   poolId: Hex,
@@ -171,39 +162,6 @@ async function readSqrtPriceX96(
     args: [poolStateSlot(poolId)],
   });
   return BigInt(data) & ((1n << 160n) - 1n);
-}
-
-function buildPoolKey(
-  deployment: Deployment,
-  pool: "hooked" | "plain",
-): {
-  currency0: Address;
-  currency1: Address;
-  fee: number;
-  tickSpacing: number;
-  hooks: Address;
-} {
-  const weth = deployment.weth as Address;
-  const usdt = deployment.usdt as Address;
-  const [currency0, currency1] = weth.toLowerCase() < usdt.toLowerCase() ? [weth, usdt] : [usdt, weth];
-
-  if (pool === "hooked") {
-    return {
-      currency0,
-      currency1,
-      fee: DYNAMIC_FEE_FLAG,
-      tickSpacing: TICK_SPACING,
-      hooks: deployment.addresses.dynamicFeeHook as Address,
-    };
-  }
-
-  return {
-    currency0,
-    currency1,
-    fee: PLAIN_POOL_FEE,
-    tickSpacing: TICK_SPACING,
-    hooks: "0x0000000000000000000000000000000000000000",
-  };
 }
 
 async function approveToken(

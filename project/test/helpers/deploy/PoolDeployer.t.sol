@@ -30,8 +30,8 @@ library PoolDeployer {
 
     function dynamicFeeHookFlags() internal pure returns (uint160) {
         return uint160(
-            Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
-                | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
+            Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG
+                | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG | Hooks.AFTER_SWAP_FLAG
         );
     }
 
@@ -156,8 +156,15 @@ library PoolDeployer {
         poolManager.initialize(key, sqrtPriceX96);
     }
 
-    /// @dev Plain WETH/USDT pool: static 0.30% fee (matches `PoolConfigLib.BASE_FEE_BPS`), no hook.
+    /// @dev Plain WETH/USDT pool: static LP fee in v4 pips, no hook.
     function createPlainWethUsdtPool(IPoolManager poolManager, uint160 sqrtPriceX96)
+        internal
+        returns (PoolKey memory key, bytes32 poolId)
+    {
+        return createPlainWethUsdtPool(poolManager, sqrtPriceX96, plainPoolStaticFee());
+    }
+
+    function createPlainWethUsdtPool(IPoolManager poolManager, uint160 sqrtPriceX96, uint24 fee)
         internal
         returns (PoolKey memory key, bytes32 poolId)
     {
@@ -166,7 +173,7 @@ library PoolDeployer {
         key = PoolKey({
             currency0: Currency.wrap(token0),
             currency1: Currency.wrap(token1),
-            fee: plainPoolStaticFee(),
+            fee: fee,
             tickSpacing: TestConstants.POOL_TICK_SPACING,
             hooks: IHooks(address(0))
         });
@@ -175,7 +182,7 @@ library PoolDeployer {
         poolManager.initialize(key, sqrtPriceX96);
     }
 
-    /// @dev 0.30% LP fee in Uniswap v4 pips (same nominal rate as default dynamic base fee).
+    /// @dev Default test plain pool fee (0.0066% in v4 pips).
     function plainPoolStaticFee() internal pure returns (uint24) {
         return PoolConfigLib.BASE_FEE_BPS;
     }

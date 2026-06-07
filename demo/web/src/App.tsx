@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  executeSwap,
   fetchActors,
   fetchLiquidityDefaults,
   fetchState,
   initDemo,
+  previewSwapFees,
   priceScaledToUsdtPerEth,
   seedLiquidity,
   setOraclePrice,
@@ -12,9 +14,11 @@ import {
   type ActorOption,
   type DemoState,
   type PoolTarget,
+  type FeeSplitPreview,
+  type SwapFeePreview,
 } from "./api";
 import { Badge, Button, Card, Field, Input, Metric, PlaceholderAction, Select } from "./components/ui";
-import { formatTokenAmount, formatUsdtPrice, formatUsdtTvl, shortenAddress } from "./lib/format";
+import { formatFeeToken, formatFeeUsdt, formatTokenAmount, formatUsdtPrice, formatUsdtTvl, feePipsToPercent, shortenAddress } from "./lib/format";
 import type { PoolSnapshot } from "./api";
 
 const PIPELINE = [
@@ -30,6 +34,7 @@ export default function App() {
   const [actors, setActors] = useState<ActorOption[]>([]);
   const [loading, setLoading] = useState(false);
   const [seeding, setSeeding] = useState(false);
+  const [swapping, setSwapping] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [priceInput, setPriceInput] = useState("3000");
   const [showTech, setShowTech] = useState(false);
@@ -38,6 +43,15 @@ export default function App() {
   const [poolTarget, setPoolTarget] = useState<PoolTarget>("both");
   const [wethAmount, setWethAmount] = useState("100");
   const [usdtAmount, setUsdtAmount] = useState("300000");
+
+  const [swapActorId] = useState<ActorId>("swapper");
+  const [swapPoolTarget, setSwapPoolTarget] = useState<PoolTarget>("both");
+  const [swapZeroForOne, setSwapZeroForOne] = useState(true);
+  const [swapAmount, setSwapAmount] = useState("0.1");
+  const [swapPreview, setSwapPreview] = useState<SwapFeePreview | null>(null);
+  const swapPreviewRequestId = useRef(0);
+
+  const ready = state?.anvilReady === true;
 
   const refresh = useCallback(async () => {
     try {
@@ -62,6 +76,41 @@ export default function App() {
       })
       .catch(() => undefined);
   }, [refresh]);
+
+  useEffect(() => {
+    setSwapPreview(null);
+  }, [swapZeroForOne, swapPoolTarget]);
+
+  useEffect(() => {
+    if (!ready || !state) {
+      setSwapPreview(null);
+      return;
+    }
+    const seeded =
+      (swapPoolTarget === "plain" && state.liquiditySeeded.plain) ||
+      (swapPoolTarget === "hooked" && state.liquiditySeeded.hooked) ||
+      (swapPoolTarget === "both" && state.liquiditySeeded.hooked && state.liquiditySeeded.plain);
+
+    const trimmed = swapAmount.trim();
+    const parsed = trimmed && !trimmed.endsWith(".") ? Number(trimmed) : NaN;
+    if (!seeded || !Number.isFinite(parsed) || parsed <= 0) {
+      setSwapPreview(null);
+      return;
+    }
+
+    const requestId = ++swapPreviewRequestId.current;
+    const timer = setTimeout(() => {
+      previewSwapFees({ pool: swapPoolTarget, zeroForOne: swapZeroForOne, amountIn: trimmed })
+        .then((preview) => {
+          if (requestId === swapPreviewRequestId.current) setSwapPreview(preview);
+        })
+        .catch(() => {
+          if (requestId === swapPreviewRequestId.current) setSwapPreview(null);
+        });
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, [ready, state, swapPoolTarget, swapZeroForOne, swapAmount]);
 
   async function handleInit() {
     setLoading(true);
@@ -110,7 +159,25 @@ export default function App() {
     }
   }
 
-  const ready = state?.anvilReady === true;
+  async function handleExecuteSwap() {
+    if (!state) return;
+    setSwapping(true);
+    setError(null);
+    try {
+      const next = await executeSwap({
+        actorId: swapActorId,
+        pool: swapPoolTarget,
+        zeroForOne: swapZeroForOne,
+        amountIn: swapAmount,
+      });
+      setState(next);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSwapping(false);
+    }
+  }
+
   const oracleDisplay = ready ? `$${formatUsdtPrice(state.oraclePriceScaled)}` : "—";
   const selectedActor = actors.find((a) => a.id === actorId);
 
@@ -122,8 +189,49 @@ export default function App() {
     if (!ready) return false;
     if (stepIndex === 0) return true;
     if (stepIndex === 1) return state.liquiditySeeded.hooked && state.liquiditySeeded.plain;
+    if (stepIndex === 2) return (state.lastSwap?.length ?? 0) > 0;
     return false;
   }
+
+  function previewMatchesInput(preview: SwapFeePreview | null): preview is SwapFeePreview {
+    if (!preview) return false;
+    return preview.zeroForOne === swapZeroForOne && preview.amountIn === swapAmount.trim();
+  }
+
+  function formatAmountOut(
+    preview: SwapFeePreview | null,
+    pool: "plain" | "hooked",
+  ): string {
+    if (!previewMatchesInput(preview)) return "—";
+    const out = pool === "plain" ? preview.plainAmountOut : preview.hookedAmountOut;
+    if (!out) return "—";
+    const outputToken = swapZeroForOne ? "USDT" : "WETH";
+    return `${formatTokenAmount(out.amountOut, outputToken === "WETH" ? 6 : 2)} ${outputToken}`;
+  }
+
+  const swapOutputToken = swapZeroForOne ? "USDT" : "WETH";
+
+  function formatSwapFeeLine(
+    preview: SwapFeePreview | null,
+    fee: FeeSplitPreview | null | undefined,
+  ): string {
+    if (!previewMatchesInput(preview) || !fee) return "—";
+    return `${formatFeeToken(fee.totalFeeRaw, fee.feeToken)} (${formatFeeUsdt(fee.totalFeeUsdt)})`;
+  }
+
+  function formatHookedDecomposition(
+    preview: SwapFeePreview | null,
+    fee: FeeSplitPreview | null | undefined,
+  ): string {
+    if (!previewMatchesInput(preview) || !fee) return "—";
+    const token = fee.feeToken;
+    return `${formatFeeToken(fee.lpShareRaw, token)} LP · ${formatFeeToken(fee.syncShareRaw, token)} sync · ${formatFeeToken(fee.feedShareRaw, token)} feed`;
+  }
+
+  const accumulated = state?.accumulatedFees ?? {
+    plain: { totalFeeUsdt: 0, lpShareUsdt: 0, syncShareUsdt: 0, feedShareUsdt: 0, swapCount: 0 },
+    hooked: { totalFeeUsdt: 0, lpShareUsdt: 0, syncShareUsdt: 0, feedShareUsdt: 0, swapCount: 0 },
+  };
 
   function poolPriceDisplay(pool?: PoolSnapshot): string {
     if (!pool) return "—";
@@ -179,10 +287,10 @@ export default function App() {
         </div>
 
         <div className="flex shrink-0 flex-wrap gap-3">
-          <Button variant="secondary" onClick={refresh} disabled={loading || seeding}>
+          <Button variant="secondary" onClick={refresh} disabled={loading || seeding || swapping}>
             Refresh state
           </Button>
-          <Button variant="primary" onClick={handleInit} disabled={loading || seeding}>
+          <Button variant="primary" onClick={handleInit} disabled={loading || seeding || swapping}>
             {loading && <span className="spinner" />}
             {loading ? "Bootstrapping…" : ready ? "Reset simulation" : "Launch simulation"}
           </Button>
@@ -385,25 +493,155 @@ export default function App() {
             <Card
               title="Public swappers"
               subtitle="Exact-in swaps; fees split LP / sync / feed treasury"
-              badge={<Badge tone="swap">Actor 2</Badge>}
+              badge={<Badge tone="swap">Step 03</Badge>}
               accent="swap"
             >
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Field label="Amount in">
-                  <Input placeholder="0.1 WETH or 300 USDT" disabled />
-                </Field>
-                <Field label="Direction">
-                  <Input placeholder="zeroForOne" disabled />
-                </Field>
+              <Field label="Target pool">
+                <Select
+                  value={swapPoolTarget}
+                  onChange={(e) => setSwapPoolTarget(e.target.value as PoolTarget)}
+                  disabled={!ready || swapping}
+                >
+                  <option value="hooked">Hooked pool (DynamicFee)</option>
+                  <option value="plain">Plain pool (static fee)</option>
+                  <option value="both">Both pools</option>
+                </Select>
+              </Field>
+
+              <Field label="Direction (zeroForOne)">
+                <Select
+                  value={swapZeroForOne ? "true" : "false"}
+                  onChange={(e) => {
+                    const z = e.target.value === "true";
+                    setSwapZeroForOne(z);
+                    setSwapAmount(z ? "0.1" : "300");
+                  }}
+                  disabled={!ready || swapping}
+                >
+                  <option value="true">WETH → USDT (true)</option>
+                  <option value="false">USDT → WETH (false)</option>
+                </Select>
+              </Field>
+
+              <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] lg:items-stretch">
+                <div className="rounded-xl border border-zinc-800/80 bg-zinc-950/50 px-4 py-3">
+                  <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-500">
+                    Amount in
+                  </div>
+                  <div className="mt-2 flex items-end gap-2">
+                    <Input
+                      type="number"
+                      value={swapAmount}
+                      onChange={(e) => setSwapAmount(e.target.value)}
+                      disabled={!ready || swapping}
+                      placeholder={swapZeroForOne ? "0.1" : "300"}
+                      className="border-0 bg-transparent px-0 py-0 text-2xl font-mono text-zinc-50 shadow-none focus:ring-0"
+                    />
+                    <span className="pb-1 text-sm font-medium text-zinc-500">
+                      {swapZeroForOne ? "WETH" : "USDT"}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="hidden items-center justify-center text-xl text-zinc-600 lg:flex">→</div>
+
+                <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-4 py-3">
+                  <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-cyan-600/80">
+                    Amount out · estimate ({swapOutputToken})
+                  </div>
+                  <div className="mt-2 space-y-2">
+                    {(swapPoolTarget === "plain" || swapPoolTarget === "both") && (
+                      <div className="flex items-baseline justify-between gap-3">
+                        <span className="text-xs text-zinc-500">Plain</span>
+                        <span className="font-mono text-lg text-zinc-100">
+                          {formatAmountOut(swapPreview, "plain")}
+                        </span>
+                      </div>
+                    )}
+                    {(swapPoolTarget === "hooked" || swapPoolTarget === "both") && (
+                      <div className="flex items-baseline justify-between gap-3">
+                        <span className="text-xs text-zinc-500">Hooked</span>
+                        <span className="font-mono text-lg text-zinc-100">
+                          {formatAmountOut(swapPreview, "hooked")}
+                        </span>
+                      </div>
+                    )}
+                    {swapPoolTarget !== "both" && !previewMatchesInput(swapPreview) && (
+                      <div className="font-mono text-lg text-zinc-600">—</div>
+                    )}
+                  </div>
+                </div>
               </div>
-              <Button variant="secondary" disabled className="mt-4 w-full">
-                Execute swap
+
+              <div className="mt-4 rounded-xl border border-zinc-800/80 bg-zinc-950/50 p-4">
+                <p className="mb-3 text-xs font-medium uppercase tracking-wide text-zinc-500">
+                  This swap — fees in input token
+                </p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {(swapPoolTarget === "plain" || swapPoolTarget === "both") && (
+                    <Metric
+                      label="Swap fee · plain"
+                      value={formatSwapFeeLine(swapPreview, swapPreview?.plain)}
+                      hint={
+                        previewMatchesInput(swapPreview)
+                          ? `${feePipsToPercent(swapPreview.plain?.feeBps ?? 10_066)} static · 100% LP`
+                          : undefined
+                      }
+                    />
+                  )}
+                  {(swapPoolTarget === "hooked" || swapPoolTarget === "both") && (
+                    <>
+                      <Metric
+                        label="Swap fee · hooked"
+                        value={formatSwapFeeLine(swapPreview, swapPreview?.hooked)}
+                        hint={
+                          previewMatchesInput(swapPreview)
+                            ? `${feePipsToPercent(swapPreview.hooked?.feeBps ?? 10_066)} dynamic (base ~1%, min ~0.5%, max ~3%)`
+                            : undefined
+                        }
+                      />
+                      <div className="sm:col-span-2">
+                        <Metric
+                          label="Hooked fee split"
+                          value={formatHookedDecomposition(swapPreview, swapPreview?.hooked)}
+                          hint={
+                            previewMatchesInput(swapPreview) && swapPreview.hooked
+                              ? `sync ${swapPreview.hooked.syncKeeperActive ? "active" : "→ LP"} · feed ${swapPreview.hooked.feedKeeperActive ? "active" : "→ LP"}`
+                              : undefined
+                          }
+                        />
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-4 rounded-xl border border-zinc-800/80 bg-zinc-950/50 p-4">
+                <p className="mb-3 text-xs font-medium uppercase tracking-wide text-zinc-500">
+                  Accumulated fees (all swaps)
+                </p>
+                <Metric
+                  label="Comparison"
+                  value={`Plain ${formatFeeUsdt(accumulated.plain.totalFeeUsdt)} · Hooked ${formatFeeUsdt(accumulated.hooked.totalFeeUsdt)}`}
+                  hint={`Plain ${accumulated.plain.swapCount} swap(s) · Hooked ${accumulated.hooked.swapCount} swap(s) · USDT equiv.`}
+                />
+              </div>
+
+              <Button
+                variant="primary"
+                className="mt-4 w-full"
+                onClick={handleExecuteSwap}
+                disabled={!ready || swapping || !previewMatchesInput(swapPreview)}
+              >
+                {swapping && <span className="spinner" />}
+                {swapping ? "Executing swap…" : "Execute swap (+1 block)"}
               </Button>
-              <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                <Metric label="LP share" value="—" />
-                <Metric label="Sync keeper" value="—" />
-                <Metric label="Feed keeper" value="—" />
-              </div>
+
+              {ready && (state.lastSwap?.length ?? 0) > 0 && (
+                <p className="mt-3 text-xs text-zinc-600">
+                  Last swap: {state.lastSwap!.length} pool(s) · signer swapper (#2). Pool prices update above.
+                </p>
+              )}
             </Card>
 
             <Card

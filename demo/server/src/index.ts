@@ -15,9 +15,21 @@ import {
 } from "./blocks.js";
 import { usdtForWeth } from "./constants.js";
 import { DEPLOYMENTS_FILE, loadDeployment, PROJECT_ROOT, runDemoDeploy, type Deployment } from "./deploy.js";
+import { previewSwapFees } from "./feePreview.js";
+import {
+  accumulateSwapFees,
+  emptyAccumulatedFees,
+  type AccumulatedFees,
+} from "./accumulatedFees.js";
 import { sendExecuteFeedOnly, type FeedSyncResult } from "./feed.js";
 import { seedLiquidityWithHashes, type PoolTarget, type SeedLiquidityResult } from "./liquidity.js";
 import { emptyPoolSnapshot, readPoolSnapshots } from "./pools.js";
+import {
+  executeSwapsWithHashes,
+  finalizeSwapResults,
+  parseSwapAmountIn,
+  type SwapResult,
+} from "./swap.js";
 import { waitForAllReceipts } from "./tx.js";
 
 const PORT = 8787;
@@ -42,6 +54,8 @@ let liquiditySeeded = { hooked: false, plain: false };
 let lastLiquiditySeed: SeedLiquidityResult[] = [];
 let feedEverSynced = false;
 let lastFeedSync: FeedSyncResult | null = null;
+let lastSwap: SwapResult[] = [];
+let accumulatedFees: AccumulatedFees = emptyAccumulatedFees();
 
 function emptyPools() {
   return { hooked: emptyPoolSnapshot("hooked"), plain: emptyPoolSnapshot("plain") };
@@ -74,6 +88,8 @@ function statePayload(extra: Record<string, unknown> = {}) {
     lastLiquiditySeed,
     lastFeedSync: serializeFeedSync(lastFeedSync),
     feedEverSynced,
+    lastSwap,
+    accumulatedFees,
     blocks: getBlockState(),
     ...extra,
   };
@@ -98,6 +114,8 @@ app.post("/api/init", async (_req, res) => {
     lastLiquiditySeed = [];
     feedEverSynced = false;
     lastFeedSync = null;
+    lastSwap = [];
+    accumulatedFees = emptyAccumulatedFees();
     resetBlockState(deployment.forkBlock);
     await syncCurrentBlockFromChain();
     await configureDemoMining();
@@ -221,6 +239,106 @@ app.post("/api/liquidity/seed", async (req, res) => {
     if (err instanceof Error && err.stack) {
       console.error(err.stack);
     }
+    res.status(500).json({ ok: false, error: message });
+  }
+});
+
+app.post("/api/swap/preview", async (req, res) => {
+  if (!deployment) {
+    res.status(503).json({ ok: false, error: "Call POST /api/init first" });
+    return;
+  }
+
+  const { pool, zeroForOne, amountIn } = req.body as {
+    pool?: PoolTarget;
+    zeroForOne?: boolean;
+    amountIn?: string;
+  };
+
+  if (!pool || !["hooked", "plain", "both"].includes(pool)) {
+    res.status(400).json({ ok: false, error: "pool required (hooked|plain|both)" });
+    return;
+  }
+  if (typeof zeroForOne !== "boolean") {
+    res.status(400).json({ ok: false, error: "zeroForOne required (boolean)" });
+    return;
+  }
+  if (!amountIn || Number(amountIn) <= 0) {
+    res.status(400).json({ ok: false, error: "amountIn required" });
+    return;
+  }
+
+  try {
+    const amountInRaw = parseSwapAmountIn(zeroForOne, amountIn);
+    const preview = await previewSwapFees(
+      deployment,
+      pool,
+      zeroForOne,
+      amountInRaw,
+      amountIn,
+      BigInt(oraclePriceScaled),
+    );
+    res.json({ ok: true, preview });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ ok: false, error: message });
+  }
+});
+
+app.post("/api/swap/execute", async (req, res) => {
+  if (!deployment) {
+    res.status(503).json({ ok: false, error: "Call POST /api/init first" });
+    return;
+  }
+
+  const { actorId, pool, zeroForOne, amountIn } = req.body as {
+    actorId?: ActorId;
+    pool?: PoolTarget;
+    zeroForOne?: boolean;
+    amountIn?: string;
+  };
+
+  if (!actorId || !ACTOR_IDS.includes(actorId)) {
+    res.status(400).json({ ok: false, error: "actorId required" });
+    return;
+  }
+  if (!pool || !["hooked", "plain", "both"].includes(pool)) {
+    res.status(400).json({ ok: false, error: "pool required (hooked|plain|both)" });
+    return;
+  }
+  if (typeof zeroForOne !== "boolean") {
+    res.status(400).json({ ok: false, error: "zeroForOne required (boolean)" });
+    return;
+  }
+  if (!amountIn || Number(amountIn) <= 0) {
+    res.status(400).json({ ok: false, error: "amountIn required" });
+    return;
+  }
+
+  try {
+    const pendingTxs: Hex[] = [];
+    let swapResults: SwapResult[] = [];
+
+    const blockNumber = await runBlockOperation(async () => {
+      const out = await executeSwapsWithHashes(
+        deployment!,
+        { actorId, pool, zeroForOne, amountIn },
+        BigInt(oraclePriceScaled),
+      );
+      pendingTxs.push(...out.txHashes);
+      swapResults = out.results;
+    });
+
+    await waitForAllReceipts(pendingTxs);
+    swapResults = await finalizeSwapResults(deployment, swapResults, BigInt(oraclePriceScaled));
+    lastSwap = swapResults;
+    accumulatedFees = accumulateSwapFees(accumulatedFees, swapResults);
+
+    const pools = await readPoolsSafe();
+    res.json(statePayload({ swapResults, blockNumber, pools }));
+  } catch (err) {
+    await configureDemoMining(false).catch(() => undefined);
+    const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ ok: false, error: message });
   }
 });

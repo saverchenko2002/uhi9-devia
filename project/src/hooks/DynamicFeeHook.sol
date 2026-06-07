@@ -8,12 +8,14 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
+import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {
     BeforeSwapDelta,
-    BeforeSwapDeltaLibrary
+    BeforeSwapDeltaLibrary,
+    toBeforeSwapDelta
 } from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
@@ -74,6 +76,18 @@ contract DynamicFeeHook is BaseHook {
         address syncKeeper;
     }
 
+    /// @dev Exact-in public swaps: fee is fixed in `beforeSwap` (pre-trade prices). Recomputing in
+    ///      `afterSwap` would use post-trade pool price and desync keeper `take` vs treasury pull.
+    struct PendingPublicSwapFee {
+        uint256 totalFee;
+        uint256 keeperTake;
+        address feeToken;
+        uint64 pythPublishTime;
+        bool set;
+    }
+
+    PendingPublicSwapFee private _pendingPublicSwapFee;
+
     constructor(
         IPoolManager poolManager,
         IPoolConfigRegistry _poolConfigRegistry,
@@ -103,8 +117,8 @@ contract DynamicFeeHook is BaseHook {
             afterSwap: true,
             beforeDonate: false,
             afterDonate: false,
-            beforeSwapReturnDelta: false,
-            afterSwapReturnDelta: true,
+            beforeSwapReturnDelta: true,
+            afterSwapReturnDelta: false,
             afterAddLiquidityReturnDelta: false,
             afterRemoveLiquidityReturnDelta: false
         });
@@ -127,11 +141,13 @@ contract DynamicFeeHook is BaseHook {
     function _beforeSwap(
         address sender,
         PoolKey calldata key,
-        SwapParams calldata,
+        SwapParams calldata params,
         bytes calldata hookData
     ) internal override returns (bytes4, BeforeSwapDelta, uint24) {
         bytes32 poolId = PoolId.unwrap(key.toId());
         PoolConfig memory cfg = poolConfigRegistry.getPoolConfig(poolId);
+
+        _pendingPublicSwapFee.set = false;
 
         if (_isKeeperSyncSwap(sender, hookData)) {
             return (
@@ -144,7 +160,7 @@ contract DynamicFeeHook is BaseHook {
         (uint256 poolPrice, uint256 oraclePrice, uint64 oracleTs) =
             _readOracleContext(poolId, key, cfg);
 
-        (uint24 feeBps,,) = PoolFeeLib.computeFeeBpsFromPrices(
+        (uint24 fullFeeBps,,) = PoolFeeLib.computeFeeBpsFromPrices(
             oracleTs, block.timestamp, poolPrice, oraclePrice, cfg
         );
 
@@ -153,9 +169,43 @@ contract DynamicFeeHook is BaseHook {
         uint16 effectiveLpBps = PoolFeeLib.effectiveLpShareBps(
             feedProvider, syncKeeper, cfg.lpShareBps, cfg.syncShareBps, cfg.feedShareBps
         );
-        feeBps = PoolFeeLib.lpFeeBpsFromEffectiveShare(feeBps, effectiveLpBps);
+        uint24 lpFeeBps = PoolFeeLib.lpFeeBpsFromEffectiveShare(fullFeeBps, effectiveLpBps);
 
-        return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, feeBps);
+        BeforeSwapDelta beforeSwapDelta = BeforeSwapDeltaLibrary.ZERO_DELTA;
+
+        // Exact-in: peel sync/feed keeper fee off the specified (input) leg before the pool swap.
+        if (params.amountSpecified < 0) {
+            uint256 amountIn = uint256(-params.amountSpecified);
+            uint256 totalFee =
+                FullMath.mulDivRoundingUp(amountIn, fullFeeBps, PoolFeeLib.PIPS_DENOMINATOR);
+
+            PoolFeeLib.SwapFeeSplit memory split = PoolFeeLib.splitSwapFee(
+                totalFee,
+                feedProvider,
+                syncKeeper,
+                cfg.lpShareBps,
+                cfg.syncShareBps,
+                cfg.feedShareBps
+            );
+
+            uint256 keeperTotalInFeeToken = split.syncAmount + split.feedAmount;
+            Currency specified = params.zeroForOne ? key.currency0 : key.currency1;
+
+            if (keeperTotalInFeeToken > 0) {
+                poolManager.take(specified, address(this), keeperTotalInFeeToken);
+                beforeSwapDelta = toBeforeSwapDelta(int128(uint128(keeperTotalInFeeToken)), 0);
+            }
+
+            _pendingPublicSwapFee = PendingPublicSwapFee({
+                totalFee: totalFee,
+                keeperTake: keeperTotalInFeeToken,
+                feeToken: Currency.unwrap(specified),
+                pythPublishTime: oracleTs,
+                set: true
+            });
+        }
+
+        return (BaseHook.beforeSwap.selector, beforeSwapDelta, _overrideLpFee(lpFeeBps));
     }
 
     function _afterSwap(
@@ -195,11 +245,30 @@ contract DynamicFeeHook is BaseHook {
         SwapParams calldata params,
         BalanceDelta delta
     ) internal returns (int128 hookDelta) {
-        PublicSwapFeeAccrual memory accrual =
-            _computePublicSwapFeeAccrual(poolId, key, params, delta);
+        PublicSwapFeeAccrual memory accrual = _pendingPublicSwapFee.set
+            ? _accrualFromPending(poolId)
+            : _computePublicSwapFeeAccrual(poolId, key, params, delta);
+        _pendingPublicSwapFee.set = false;
+
         if (accrual.totalFee == 0 || accrual.feeToken == address(0)) return 0;
 
         return _depositPublicSwapFee(_swapFeeContext(poolId, accrual), key, params, delta);
+    }
+
+    function _accrualFromPending(bytes32 poolId)
+        internal
+        view
+        returns (PublicSwapFeeAccrual memory accrual)
+    {
+        PendingPublicSwapFee memory pending = _pendingPublicSwapFee;
+        accrual.cfg = poolConfigRegistry.getPoolConfig(poolId);
+        accrual.feeToken = pending.feeToken;
+        accrual.totalFee = pending.totalFee;
+        accrual.pythPublishTime = pending.pythPublishTime;
+    }
+
+    function _overrideLpFee(uint24 lpFeeBps) internal pure returns (uint24) {
+        return lpFeeBps | LPFeeLibrary.OVERRIDE_FEE_FLAG;
     }
 
     function _swapFeeContext(bytes32 poolId, PublicSwapFeeAccrual memory accrual)
@@ -230,9 +299,9 @@ contract DynamicFeeHook is BaseHook {
     function _depositPublicSwapFee(
         SwapFeeContext memory ctx,
         PoolKey calldata key,
-        SwapParams calldata params,
-        BalanceDelta delta
-    ) internal returns (int128 hookDelta) {
+        SwapParams calldata,
+        BalanceDelta
+    ) internal returns (int128) {
         PublicSwapFeeAccrual memory accrual = ctx.accrual;
 
         PoolFeeLib.SwapFeeSplit memory split = PoolFeeLib.splitSwapFee(
@@ -245,38 +314,12 @@ contract DynamicFeeHook is BaseHook {
         );
 
         uint256 keeperTotalInFeeToken = split.syncAmount + split.feedAmount;
-        if (keeperTotalInFeeToken == 0) {
-            _treasuryAccrue(ctx, accrual.feeToken, accrual.totalFee);
-            return 0;
+        if (keeperTotalInFeeToken > 0) {
+            IERC20(accrual.feeToken).forceApprove(address(keepersTreasury), keeperTotalInFeeToken);
         }
 
-        (uint256 keeperTake, Currency takeCurrency) = PoolFeeLib.computeKeeperTakeUnspecified(
-            key, params, delta, keeperTotalInFeeToken, accrual.feeToken
-        );
-        if (keeperTake == 0) {
-            _treasuryAccrue(ctx, accrual.feeToken, accrual.totalFee);
-            return 0;
-        }
-
-        return _takeKeeperFeeToTreasury(ctx, split, keeperTotalInFeeToken, keeperTake, takeCurrency);
-    }
-
-    function _takeKeeperFeeToTreasury(
-        SwapFeeContext memory ctx,
-        PoolFeeLib.SwapFeeSplit memory split,
-        uint256 keeperTotalInFeeToken,
-        uint256 keeperTake,
-        Currency takeCurrency
-    ) internal returns (int128 hookDelta) {
-        address takeToken = Currency.unwrap(takeCurrency);
-        uint256 totalFeeForAccrue =
-            keeperTake + FullMath.mulDiv(split.lpAmount, keeperTake, keeperTotalInFeeToken);
-
-        poolManager.take(takeCurrency, address(this), keeperTake);
-        IERC20(takeToken).forceApprove(address(keepersTreasury), keeperTake);
-        _treasuryAccrue(ctx, takeToken, totalFeeForAccrue);
-
-        return keeperTake.toInt128();
+        _treasuryAccrue(ctx, accrual.feeToken, accrual.totalFee);
+        return 0;
     }
 
     function _computePublicSwapFeeAccrual(

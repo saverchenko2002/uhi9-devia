@@ -49,9 +49,10 @@ contract DemoEnvironment is Script {
 
         (, hookedPoolId) =
             PoolDeployer.createWethUsdtPool(poolManager, hook, PoolDeployer.wethUsdtSqrtPriceX96());
-        (, plainPoolId) = PoolDeployer.createPlainWethUsdtPool(poolManager, PoolDeployer.wethUsdtSqrtPriceX96());
+        (, plainPoolId) =
+            PoolDeployer.createPlainWethUsdtPool(poolManager, PoolDeployer.wethUsdtSqrtPriceX96(), PoolConfigBuilder.demoBaseFeePips());
 
-        sys.registry.updatePoolConfig(hookedPoolId, PoolConfigBuilder.defaultEthUsdtPool());
+        sys.registry.updatePoolConfig(hookedPoolId, PoolConfigBuilder.demoEthUsdtPool());
 
         new PoolLiquidityRouter(poolManager);
         new PoolSwapRouter(poolManager);
@@ -92,8 +93,8 @@ contract DemoEnvironment is Script {
         bytes32 salt = TestConstants.DYNAMIC_FEE_HOOK_SALT;
         if (salt == bytes32(0)) {
             uint160 flags = uint160(
-                Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
-                    | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
+                Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG
+                    | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG | Hooks.AFTER_SWAP_FLAG
             );
             (, salt) = HookMiner.find(hookDeployerAddr, flags, type(DynamicFeeHook).creationCode, constructorArgs);
         }

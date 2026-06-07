@@ -114,10 +114,10 @@ export function Field({
   );
 }
 
-export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
+export function Input({ className = "", ...props }: React.InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
-      className="w-full rounded-lg border border-zinc-700/80 bg-zinc-950 px-3 py-2.5 font-mono text-sm text-zinc-100 outline-none ring-cyan-500/30 transition placeholder:text-zinc-600 focus:border-cyan-500/50 focus:ring-2 disabled:opacity-40"
+      className={`w-full rounded-lg border border-zinc-700/80 bg-zinc-950 px-3 py-2.5 font-mono text-sm text-zinc-100 outline-none ring-cyan-500/30 transition placeholder:text-zinc-600 focus:border-cyan-500/50 focus:ring-2 disabled:opacity-40 ${className}`}
       {...props}
     />
   );

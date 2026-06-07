@@ -4,8 +4,12 @@ export const POOL_MANAGER = "0x000000000004444c5dc75cB358380D2e3dE08A90" as cons
 
 /** Uniswap v4 dynamic-fee flag (LPFeeLibrary.DYNAMIC_FEE_FLAG). */
 export const DYNAMIC_FEE_FLAG = 0x800000;
-/** Plain pool static fee pips (PoolConfigLib.BASE_FEE_BPS). */
-export const PLAIN_POOL_FEE = 66;
+/** Plain pool static fee pips (demo ~1.01%, unique vs mainnet 10000-tier pools). */
+export const PLAIN_POOL_FEE = 10_066;
+/** Hooked pool demo fee band (v4 pips). */
+export const HOOKED_DEMO_BASE_FEE = 10_066;
+export const HOOKED_DEMO_MIN_FEE = 5_033;
+export const HOOKED_DEMO_MAX_FEE = 30_198;
 export const TICK_SPACING = 60;
 
 const MIN_TICK = -887272;
