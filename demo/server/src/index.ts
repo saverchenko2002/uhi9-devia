@@ -3,10 +3,11 @@ import express from "express";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { ACTORS, ACTOR_IDS, type ActorId } from "./accounts.js";
-import { startAnvil } from "./anvil.js";
+import { isAnvilReachable, startAnvil } from "./anvil.js";
 import { usdtForWeth } from "./constants.js";
 import { DEPLOYMENTS_FILE, loadDeployment, PROJECT_ROOT, runDemoDeploy, type Deployment } from "./deploy.js";
 import { seedLiquidity, type PoolTarget, type SeedLiquidityResult } from "./liquidity.js";
+import { emptyPoolSnapshot, readPoolSnapshots } from "./pools.js";
 
 const PORT = 8787;
 
@@ -24,39 +25,60 @@ function readRpcMainnet(): string {
 }
 
 let deployment: Deployment | null = null;
+let anvilReady = false;
 let oraclePriceScaled = "300000000000";
 let liquiditySeeded = { hooked: false, plain: false };
 let lastLiquiditySeed: SeedLiquidityResult[] = [];
+
+function emptyPools() {
+  return { hooked: emptyPoolSnapshot("hooked"), plain: emptyPoolSnapshot("plain") };
+}
+
+async function readPoolsSafe(): Promise<ReturnType<typeof readPoolSnapshots>> {
+  if (!deployment || !anvilReady || !(await isAnvilReachable())) {
+    anvilReady = false;
+    return emptyPools();
+  }
+  return readPoolSnapshots(deployment);
+}
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, ready: deployment !== null });
+  res.json({ ok: true, ready: deployment !== null, anvilReady });
 });
 
 app.post("/api/init", async (_req, res) => {
   try {
     const rpc = readRpcMainnet();
     await startAnvil(rpc);
+    anvilReady = true;
     deployment = runDemoDeploy();
     oraclePriceScaled = deployment.oraclePriceScaled;
     liquiditySeeded = { hooked: false, plain: false };
     lastLiquiditySeed = [];
-    res.json({ ok: true, deployment, oraclePriceScaled, liquiditySeeded, lastLiquiditySeed });
+    const pools = await readPoolSnapshots(deployment);
+    res.json({ ok: true, anvilReady, deployment, oraclePriceScaled, liquiditySeeded, lastLiquiditySeed, pools });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ ok: false, error: message });
   }
 });
 
-app.get("/api/state", (_req, res) => {
+app.get("/api/state", async (_req, res) => {
   if (!deployment) {
     res.status(503).json({ ok: false, error: "Call POST /api/init first" });
     return;
   }
-  res.json({ ok: true, deployment, oraclePriceScaled, liquiditySeeded, lastLiquiditySeed });
+  try {
+    const pools = await readPoolsSafe();
+    res.json({ ok: true, anvilReady, deployment, oraclePriceScaled, liquiditySeeded, lastLiquiditySeed, pools });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ ok: false, error: message });
+  }
 });
 
 app.get("/api/actors", (_req, res) => {
@@ -110,7 +132,8 @@ app.post("/api/liquidity/seed", async (req, res) => {
     }
     lastLiquiditySeed = results;
     console.log("[seed] POST /api/liquidity/seed OK", { results });
-    res.json({ ok: true, results, liquiditySeeded, lastLiquiditySeed });
+    const pools = await readPoolsSafe();
+    res.json({ ok: true, results, liquiditySeeded, lastLiquiditySeed, pools });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[seed] POST /api/liquidity/seed FAILED:", message);

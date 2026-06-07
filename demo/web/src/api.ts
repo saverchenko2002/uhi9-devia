@@ -26,11 +26,26 @@ export type LiquiditySeedResult = {
   usdt: string;
 };
 
+export type PoolSnapshot = {
+  pool: "hooked" | "plain";
+  initialized: boolean;
+  priceScaled: string;
+  priceUsdtPerEth: number;
+  wethWei: string;
+  weth: number;
+  usdtRaw: string;
+  usdt: number;
+  tvlUsdt: number;
+  liquidity: string;
+};
+
 export type DemoState = {
   deployment: Deployment;
+  anvilReady?: boolean;
   oraclePriceScaled: string;
   liquiditySeeded: { hooked: boolean; plain: boolean };
   lastLiquiditySeed: LiquiditySeedResult[];
+  pools?: { hooked: PoolSnapshot; plain: PoolSnapshot };
 };
 
 export type LiquidityDefaults = {
@@ -72,7 +87,11 @@ export async function seedLiquidity(body: {
   pool: PoolTarget;
   wethAmount: string;
   usdtAmount: string;
-}): Promise<{ results: LiquiditySeedResult[]; liquiditySeeded: DemoState["liquiditySeeded"] }> {
+}): Promise<{
+  results: LiquiditySeedResult[];
+  liquiditySeeded: DemoState["liquiditySeeded"];
+  pools?: DemoState["pools"];
+}> {
   const res = await fetch(`${API}/api/liquidity/seed`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -80,7 +99,7 @@ export async function seedLiquidity(body: {
   });
   const json = await res.json();
   if (!json.ok) throw new Error(json.error ?? "seed failed");
-  return { results: json.results, liquiditySeeded: json.liquiditySeeded };
+  return { results: json.results, liquiditySeeded: json.liquiditySeeded, pools: json.pools };
 }
 
 export async function setOraclePrice(priceScaled: string): Promise<string> {
@@ -105,11 +124,13 @@ export function usdtPerEthToScaled(price: number): string {
 function normalizeState(json: Record<string, unknown>): DemoState {
   return {
     deployment: json.deployment as Deployment,
+    anvilReady: json.anvilReady as boolean | undefined,
     oraclePriceScaled: json.oraclePriceScaled as string,
     liquiditySeeded: (json.liquiditySeeded as DemoState["liquiditySeeded"]) ?? {
       hooked: false,
       plain: false,
     },
     lastLiquiditySeed: (json.lastLiquiditySeed as LiquiditySeedResult[]) ?? [],
+    pools: json.pools as DemoState["pools"],
   };
 }

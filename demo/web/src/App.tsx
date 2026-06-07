@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   fetchActors,
   fetchLiquidityDefaults,
@@ -14,7 +14,8 @@ import {
   type PoolTarget,
 } from "./api";
 import { Badge, Button, Card, Field, Input, Metric, PlaceholderAction, Select } from "./components/ui";
-import { formatUsdtPrice, shortenAddress } from "./lib/format";
+import { formatTokenAmount, formatUsdtPrice, formatUsdtTvl, shortenAddress } from "./lib/format";
+import type { PoolSnapshot } from "./api";
 
 const PIPELINE = [
   { step: "01", label: "Fork & deploy", detail: "Mainnet @ fixed block" },
@@ -45,6 +46,7 @@ export default function App() {
       if (next) {
         setState(next);
         setPriceInput(String(priceScaledToUsdtPerEth(next.oraclePriceScaled)));
+        setError(null);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -94,14 +96,14 @@ export default function App() {
     setSeeding(true);
     setError(null);
     try {
-      const { liquiditySeeded, results } = await seedLiquidity({
+      const { liquiditySeeded, results, pools } = await seedLiquidity({
         actorId,
         pool: poolTarget,
         wethAmount,
         usdtAmount,
       });
       setState((prev) =>
-        prev ? { ...prev, liquiditySeeded, lastLiquiditySeed: results } : prev,
+        prev ? { ...prev, liquiditySeeded, lastLiquiditySeed: results, pools: pools ?? prev.pools } : prev,
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -110,15 +112,54 @@ export default function App() {
     }
   }
 
-  const ready = state !== null;
+  const ready = state?.anvilReady === true;
   const oracleDisplay = ready ? `$${formatUsdtPrice(state.oraclePriceScaled)}` : "—";
   const selectedActor = actors.find((a) => a.id === actorId);
+
+  function poolHasLiquidity(pool?: PoolSnapshot): boolean {
+    return !!pool && BigInt(pool.liquidity) > 0n;
+  }
 
   function pipelineDone(stepIndex: number): boolean {
     if (!ready) return false;
     if (stepIndex === 0) return true;
     if (stepIndex === 1) return state.liquiditySeeded.hooked && state.liquiditySeeded.plain;
     return false;
+  }
+
+  function poolPriceDisplay(pool?: PoolSnapshot): string {
+    if (!pool) return "—";
+    if (!poolHasLiquidity(pool)) return "$0";
+    return `$${formatUsdtPrice(pool.priceScaled)}`;
+  }
+
+  function PoolAssetsCard({
+    title,
+    badge,
+    accent,
+    pool,
+  }: {
+    title: string;
+    badge: ReactNode;
+    accent: "hooked" | "plain";
+    pool?: PoolSnapshot;
+  }) {
+    return (
+      <Card title={title} subtitle="On-chain slot0 + active liquidity" badge={badge} accent={accent}>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Metric label="Pool price" value={poolPriceDisplay(pool)} hint="USDT per 1 WETH (0 until LP seeded)" />
+          <Metric label="TVL" value={pool ? formatUsdtTvl(poolHasLiquidity(pool) ? pool.tvlUsdt : 0) : "—"} hint="WETH×price + USDT" />
+          <Metric
+            label="WETH in pool"
+            value={pool ? formatTokenAmount(poolHasLiquidity(pool) ? pool.weth : 0) : "—"}
+          />
+          <Metric
+            label="USDT in pool"
+            value={pool ? formatTokenAmount(poolHasLiquidity(pool) ? pool.usdt : 0, 0) : "—"}
+          />
+        </div>
+      </Card>
+    );
   }
 
   return (
@@ -231,6 +272,21 @@ export default function App() {
               label="Plain pool"
               value={ready ? shortenAddress(state.deployment.addresses.poolManager) : "—"}
               hint={ready && state.liquiditySeeded.plain ? "Liquidity seeded" : "v4 PoolManager"}
+            />
+          </div>
+
+          <div className="grid gap-5 lg:grid-cols-2">
+            <PoolAssetsCard
+              title="Hooked pool"
+              badge={<Badge tone="hooked">WETH / USDT</Badge>}
+              accent="hooked"
+              pool={state?.pools?.hooked}
+            />
+            <PoolAssetsCard
+              title="Plain pool"
+              badge={<Badge tone="plain">WETH / USDT</Badge>}
+              accent="plain"
+              pool={state?.pools?.plain}
             />
           </div>
 
@@ -363,7 +419,10 @@ export default function App() {
               <PlaceholderAction label="Arbitrage stale plain pool → reference price" />
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <Metric label="Arb profit" value="—" hint="USDT net of capital" />
-                <Metric label="Plain pool price" value="—" />
+                <Metric
+                  label="Plain pool price"
+                  value={poolPriceDisplay(state?.pools?.plain)}
+                />
               </div>
             </Card>
           </div>

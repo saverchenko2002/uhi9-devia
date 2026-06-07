@@ -66,3 +66,13 @@ export async function stopAnvil(): Promise<void> {
   killPort(ANVIL_PORT);
   await sleep(400);
 }
+
+export async function isAnvilReachable(): Promise<boolean> {
+  try {
+    const client = createPublicClient({ chain: foundry, transport: http(ANVIL_RPC) });
+    await client.getChainId();
+    return true;
+  } catch {
+    return false;
+  }
+}
