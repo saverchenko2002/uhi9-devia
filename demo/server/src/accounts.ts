@@ -8,12 +8,13 @@ export const ANVIL_PRIVATE_KEYS = [
   "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a",
   "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6",
   "0x47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a",
+  "0x8b3aa350cf5c4cdb3609ac4caba2d5140e3f178fee3326590799930398156c00",
 ] as const;
 
 /** Derived from keys — must match the account that signs txs for each key. */
 export const ANVIL_ACCOUNTS = ANVIL_PRIVATE_KEYS.map(
   (key) => privateKeyToAccount(key).address,
-) as readonly [Address, Address, Address, Address, Address];
+) as readonly [Address, Address, Address, Address, Address, Address];
 
 export const FORK_BLOCK = 25257218;
 export const ANVIL_RPC = "http://127.0.0.1:8545";
@@ -23,8 +24,9 @@ export const LP = ANVIL_ACCOUNTS[1];
 export const SWAPPER = ANVIL_ACCOUNTS[2];
 export const SYNC_KEEPER = ANVIL_ACCOUNTS[3];
 export const PLAIN_ARB = ANVIL_ACCOUNTS[4];
+export const FEED_KEEPER = ANVIL_ACCOUNTS[5];
 
-export const ACTOR_IDS = ["owner", "lp", "swapper", "syncKeeper", "plainArb"] as const;
+export const ACTOR_IDS = ["owner", "lp", "swapper", "syncKeeper", "plainArb", "feedKeeper"] as const;
 export type ActorId = (typeof ACTOR_IDS)[number];
 
 export type Actor = {
@@ -49,6 +51,12 @@ export const ACTORS: Actor[] = [
     label: "Plain arb (#4)",
     address: ANVIL_ACCOUNTS[4],
     privateKey: ANVIL_PRIVATE_KEYS[4],
+  },
+  {
+    id: "feedKeeper",
+    label: "Feed keeper (#5)",
+    address: ANVIL_ACCOUNTS[5],
+    privateKey: ANVIL_PRIVATE_KEYS[5],
   },
 ];
 

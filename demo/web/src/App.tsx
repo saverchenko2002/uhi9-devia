@@ -84,8 +84,8 @@ export default function App() {
     setError(null);
     try {
       const scaled = usdtPerEthToScaled(Number(priceInput));
-      const updated = await setOraclePrice(scaled);
-      setState((prev) => (prev ? { ...prev, oraclePriceScaled: updated } : prev));
+      const next = await setOraclePrice(scaled);
+      setState(next);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -96,15 +96,13 @@ export default function App() {
     setSeeding(true);
     setError(null);
     try {
-      const { liquiditySeeded, results, pools } = await seedLiquidity({
+      const next = await seedLiquidity({
         actorId,
         pool: poolTarget,
         wethAmount,
         usdtAmount,
       });
-      setState((prev) =>
-        prev ? { ...prev, liquiditySeeded, lastLiquiditySeed: results, pools: pools ?? prev.pools } : prev,
-      );
+      setState(next);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -251,18 +249,30 @@ export default function App() {
               onClick={handlePriceApply}
               disabled={!ready}
             >
-              Update reference price
+              Sync oracle via feed keeper
             </Button>
             <p className="mt-3 text-xs leading-relaxed text-zinc-600">
-              Positions and fee breakdowns convert to USDT at this rate. Pyth seed wiring follows.
+              Calls KeeperExecutor.executeFeedOnly as feed keeper (#5). Each update mines +1 block.
             </p>
           </Card>
         </aside>
 
         <main className="space-y-6">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Metric label="Fork block" value={ready ? String(state.deployment.forkBlock) : "—"} />
-            <Metric label="Reference ETH" value={oracleDisplay} hint="USDT per 1 WETH" />
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+            <Metric label="Fork block" value={ready ? String(state.blocks?.forkBlock ?? state.deployment.forkBlock) : "—"} />
+            <Metric label="Current block" value={ready ? String(state.blocks?.currentBlock ?? "—") : "—"} />
+            <Metric
+              label="Feed sync block"
+              value={ready && state.blocks?.feedSyncBlock != null ? String(state.blocks.feedSyncBlock) : "—"}
+            />
+            <Metric
+              label="Pool sync block"
+              value={ready && state.blocks?.poolSyncBlock != null ? String(state.blocks.poolSyncBlock) : "—"}
+            />
+            <Metric label="Reference ETH" value={oracleDisplay} hint="USDT per 1 WETH (on-chain Pyth)" />
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
             <Metric
               label="Hooked pool"
               value={ready ? shortenAddress(state.deployment.addresses.dynamicFeeHook) : "—"}
@@ -366,8 +376,8 @@ export default function App() {
 
               {ready && selectedActor && (
                 <p className="mt-3 text-xs text-zinc-600">
-                  Tokens are minted to {shortenAddress(selectedActor.address)} via Anvil, approved
-                  to the liquidity router, then added full-range (same ticks as integration tests).
+                  First seed mines +1 block and runs feed keeper (executeFeedOnly) before LP deposit.
+                  Tokens go to {shortenAddress(selectedActor.address)} via Anvil, then full-range add.
                 </p>
               )}
             </Card>

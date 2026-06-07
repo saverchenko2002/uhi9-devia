@@ -1,6 +1,6 @@
 const API = "http://localhost:8787";
 
-export type ActorId = "owner" | "lp" | "swapper" | "syncKeeper" | "plainArb";
+export type ActorId = "owner" | "lp" | "swapper" | "syncKeeper" | "plainArb" | "feedKeeper";
 
 export type ActorOption = {
   id: ActorId;
@@ -39,10 +39,26 @@ export type PoolSnapshot = {
   liquidity: string;
 };
 
+export type BlockState = {
+  forkBlock: number;
+  currentBlock: number;
+  feedSyncBlock: number | null;
+  poolSyncBlock: number | null;
+};
+
+export type FeedSyncResult = {
+  txHash: string;
+  publishTime: string;
+  priceScaled: string;
+};
+
 export type DemoState = {
   deployment: Deployment;
   anvilReady?: boolean;
   oraclePriceScaled: string;
+  feedEverSynced?: boolean;
+  lastFeedSync?: FeedSyncResult | null;
+  blocks?: BlockState;
   liquiditySeeded: { hooked: boolean; plain: boolean };
   lastLiquiditySeed: LiquiditySeedResult[];
   pools?: { hooked: PoolSnapshot; plain: PoolSnapshot };
@@ -87,11 +103,7 @@ export async function seedLiquidity(body: {
   pool: PoolTarget;
   wethAmount: string;
   usdtAmount: string;
-}): Promise<{
-  results: LiquiditySeedResult[];
-  liquiditySeeded: DemoState["liquiditySeeded"];
-  pools?: DemoState["pools"];
-}> {
+}): Promise<DemoState & { results: LiquiditySeedResult[] }> {
   const res = await fetch(`${API}/api/liquidity/seed`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -99,10 +111,10 @@ export async function seedLiquidity(body: {
   });
   const json = await res.json();
   if (!json.ok) throw new Error(json.error ?? "seed failed");
-  return { results: json.results, liquiditySeeded: json.liquiditySeeded, pools: json.pools };
+  return { ...normalizeState(json), results: json.results as LiquiditySeedResult[] };
 }
 
-export async function setOraclePrice(priceScaled: string): Promise<string> {
+export async function setOraclePrice(priceScaled: string): Promise<DemoState> {
   const res = await fetch(`${API}/api/oracle/price`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -110,7 +122,7 @@ export async function setOraclePrice(priceScaled: string): Promise<string> {
   });
   const json = await res.json();
   if (!json.ok) throw new Error(json.error ?? "oracle update failed");
-  return json.oraclePriceScaled;
+  return normalizeState(json);
 }
 
 export function priceScaledToUsdtPerEth(scaled: string): number {
@@ -126,6 +138,9 @@ function normalizeState(json: Record<string, unknown>): DemoState {
     deployment: json.deployment as Deployment,
     anvilReady: json.anvilReady as boolean | undefined,
     oraclePriceScaled: json.oraclePriceScaled as string,
+    feedEverSynced: json.feedEverSynced as boolean | undefined,
+    lastFeedSync: (json.lastFeedSync as FeedSyncResult | null) ?? null,
+    blocks: json.blocks as BlockState | undefined,
     liquiditySeeded: (json.liquiditySeeded as DemoState["liquiditySeeded"]) ?? {
       hooked: false,
       plain: false,

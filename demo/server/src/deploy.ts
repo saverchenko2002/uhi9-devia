@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
+  FEED_KEEPER,
   FORK_BLOCK,
   LP,
   OWNER,
@@ -28,6 +29,7 @@ export type Deployment = {
     swapper: `0x${string}`;
     syncKeeper: `0x${string}`;
     plainArb: `0x${string}`;
+    feedKeeper: `0x${string}`;
   };
   addresses: Record<string, `0x${string}` | string>;
 };
@@ -100,6 +102,7 @@ function buildAndWriteDeployment(): Deployment {
       swapper: SWAPPER,
       syncKeeper: SYNC_KEEPER,
       plainArb: PLAIN_ARB,
+      feedKeeper: FEED_KEEPER,
     },
     addresses,
   };

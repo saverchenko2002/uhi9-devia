@@ -2,12 +2,23 @@ import cors from "cors";
 import express from "express";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { ACTORS, ACTOR_IDS, type ActorId } from "./accounts.js";
+import type { Hex } from "viem";
+import { ACTORS, ACTOR_IDS, FORK_BLOCK, type ActorId } from "./accounts.js";
 import { isAnvilReachable, startAnvil } from "./anvil.js";
+import {
+  configureDemoMining,
+  getBlockState,
+  markFeedSync,
+  resetBlockState,
+  runBlockOperation,
+  syncCurrentBlockFromChain,
+} from "./blocks.js";
 import { usdtForWeth } from "./constants.js";
 import { DEPLOYMENTS_FILE, loadDeployment, PROJECT_ROOT, runDemoDeploy, type Deployment } from "./deploy.js";
-import { seedLiquidity, type PoolTarget, type SeedLiquidityResult } from "./liquidity.js";
+import { sendExecuteFeedOnly, type FeedSyncResult } from "./feed.js";
+import { seedLiquidityWithHashes, type PoolTarget, type SeedLiquidityResult } from "./liquidity.js";
 import { emptyPoolSnapshot, readPoolSnapshots } from "./pools.js";
+import { waitForAllReceipts } from "./tx.js";
 
 const PORT = 8787;
 
@@ -29,6 +40,8 @@ let anvilReady = false;
 let oraclePriceScaled = "300000000000";
 let liquiditySeeded = { hooked: false, plain: false };
 let lastLiquiditySeed: SeedLiquidityResult[] = [];
+let feedEverSynced = false;
+let lastFeedSync: FeedSyncResult | null = null;
 
 function emptyPools() {
   return { hooked: emptyPoolSnapshot("hooked"), plain: emptyPoolSnapshot("plain") };
@@ -42,12 +55,36 @@ async function readPoolsSafe(): Promise<ReturnType<typeof readPoolSnapshots>> {
   return readPoolSnapshots(deployment);
 }
 
+function serializeFeedSync(feed: FeedSyncResult | null) {
+  if (!feed) return null;
+  return {
+    txHash: feed.txHash,
+    priceScaled: feed.priceScaled,
+    publishTime: feed.publishTime.toString(),
+  };
+}
+
+function statePayload(extra: Record<string, unknown> = {}) {
+  return {
+    ok: true,
+    anvilReady,
+    deployment,
+    oraclePriceScaled,
+    liquiditySeeded,
+    lastLiquiditySeed,
+    lastFeedSync: serializeFeedSync(lastFeedSync),
+    feedEverSynced,
+    blocks: getBlockState(),
+    ...extra,
+  };
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, ready: deployment !== null, anvilReady });
+  res.json({ ok: true, ready: deployment !== null, anvilReady, blocks: getBlockState() });
 });
 
 app.post("/api/init", async (_req, res) => {
@@ -59,8 +96,13 @@ app.post("/api/init", async (_req, res) => {
     oraclePriceScaled = deployment.oraclePriceScaled;
     liquiditySeeded = { hooked: false, plain: false };
     lastLiquiditySeed = [];
+    feedEverSynced = false;
+    lastFeedSync = null;
+    resetBlockState(deployment.forkBlock);
+    await syncCurrentBlockFromChain();
+    await configureDemoMining();
     const pools = await readPoolSnapshots(deployment);
-    res.json({ ok: true, anvilReady, deployment, oraclePriceScaled, liquiditySeeded, lastLiquiditySeed, pools });
+    res.json(statePayload({ pools }));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ ok: false, error: message });
@@ -73,8 +115,11 @@ app.get("/api/state", async (_req, res) => {
     return;
   }
   try {
+    if (anvilReady && (await isAnvilReachable())) {
+      await syncCurrentBlockFromChain();
+    }
     const pools = await readPoolsSafe();
-    res.json({ ok: true, anvilReady, deployment, oraclePriceScaled, liquiditySeeded, lastLiquiditySeed, pools });
+    res.json(statePayload({ pools }));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ ok: false, error: message });
@@ -112,7 +157,10 @@ app.post("/api/liquidity/seed", async (req, res) => {
   };
 
   if (!actorId || !ACTOR_IDS.includes(actorId)) {
-    res.status(400).json({ ok: false, error: "actorId required (owner|lp|swapper|syncKeeper|plainArb)" });
+    res.status(400).json({
+      ok: false,
+      error: "actorId required (owner|lp|swapper|syncKeeper|plainArb|feedKeeper)",
+    });
     return;
   }
   if (!pool || !["hooked", "plain", "both"].includes(pool)) {
@@ -126,15 +174,48 @@ app.post("/api/liquidity/seed", async (req, res) => {
 
   try {
     console.log("[seed] POST /api/liquidity/seed", { actorId, pool, wethAmount, usdtAmount });
-    const results = await seedLiquidity(deployment, { actorId, pool, wethAmount, usdtAmount });
-    for (const r of results) {
+
+    const pendingTxs: Hex[] = [];
+    let feedSync: FeedSyncResult | null = null;
+    let seedResults: SeedLiquidityResult[] = [];
+
+    const blockNumber = await runBlockOperation(async () => {
+      if (!feedEverSynced) {
+        feedSync = await sendExecuteFeedOnly(deployment!, BigInt(oraclePriceScaled));
+        pendingTxs.push(feedSync.txHash);
+      }
+
+      const { results, txHashes } = await seedLiquidityWithHashes(
+        deployment!,
+        { actorId, pool, wethAmount, usdtAmount },
+        { waitReceipt: false },
+      );
+      pendingTxs.push(...txHashes);
+      seedResults = results;
+    });
+
+    await waitForAllReceipts(pendingTxs);
+
+    if (feedSync) {
+      feedEverSynced = true;
+      lastFeedSync = feedSync;
+      markFeedSync(blockNumber);
+    }
+    lastLiquiditySeed = seedResults;
+    for (const r of seedResults) {
       liquiditySeeded[r.pool] = true;
     }
-    lastLiquiditySeed = results;
-    console.log("[seed] POST /api/liquidity/seed OK", { results });
+
+    console.log("[seed] POST /api/liquidity/seed OK", { blockNumber, txCount: pendingTxs.length });
     const pools = await readPoolsSafe();
-    res.json({ ok: true, results, liquiditySeeded, lastLiquiditySeed, pools });
+    res.json(
+      statePayload({
+        results: lastLiquiditySeed,
+        pools,
+      }),
+    );
   } catch (err) {
+    await configureDemoMining(false).catch(() => undefined);
     const message = err instanceof Error ? err.message : String(err);
     console.error("[seed] POST /api/liquidity/seed FAILED:", message);
     if (err instanceof Error && err.stack) {
@@ -144,19 +225,43 @@ app.post("/api/liquidity/seed", async (req, res) => {
   }
 });
 
-app.post("/api/oracle/price", (req, res) => {
+app.post("/api/oracle/price", async (req, res) => {
+  if (!deployment) {
+    res.status(503).json({ ok: false, error: "Call POST /api/init first" });
+    return;
+  }
+
   const { priceScaled } = req.body as { priceScaled?: string };
   if (!priceScaled) {
     res.status(400).json({ ok: false, error: "priceScaled required" });
     return;
   }
-  oraclePriceScaled = priceScaled;
-  res.json({ ok: true, oraclePriceScaled });
+
+  try {
+    let feedSync: FeedSyncResult | null = null;
+    const blockNumber = await runBlockOperation(async () => {
+      feedSync = await sendExecuteFeedOnly(deployment!, BigInt(priceScaled));
+    });
+
+    await waitForAllReceipts([feedSync!.txHash]);
+    markFeedSync(blockNumber);
+    feedEverSynced = true;
+    lastFeedSync = feedSync;
+    oraclePriceScaled = priceScaled;
+
+    const pools = await readPoolsSafe();
+    res.json(statePayload({ pools }));
+  } catch (err) {
+    await configureDemoMining(false).catch(() => undefined);
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ ok: false, error: message });
+  }
 });
 
 app.listen(PORT, () => {
   console.log(`UHI9 demo API http://localhost:${PORT}`);
   console.log(`Project root: ${PROJECT_ROOT}`);
+  resetBlockState(FORK_BLOCK);
   try {
     deployment = loadDeployment();
     console.log(`Loaded existing ${DEPLOYMENTS_FILE}`);

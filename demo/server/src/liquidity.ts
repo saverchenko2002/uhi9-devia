@@ -10,7 +10,7 @@ import {
 } from "viem";
 import { foundry } from "viem/chains";
 import type { Deployment } from "./deploy.js";
-import { fundUsdt, fundWeth } from "./tokens.js";
+import { fundUsdtDirect, fundWeth } from "./tokens.js";
 import {
   DYNAMIC_FEE_FLAG,
   fullRangeTickLower,
@@ -22,6 +22,7 @@ import {
   WETH,
 } from "./constants.js";
 import { ANVIL_RPC, getActorAccount, type ActorId } from "./accounts.js";
+import { sendContractTx } from "./tx.js";
 
 const POOLS_SLOT = "0x0000000000000000000000000000000000000000000000000000000000000006" as Hex;
 
@@ -212,6 +213,7 @@ async function approveToken(
   owner: Address,
   spender: Address,
   amount: bigint,
+  waitReceipt = true,
 ) {
   const tokenLabel = token.toLowerCase() === USDT.toLowerCase() ? "USDT" : "WETH";
   const allowance = await publicClient.readContract({
@@ -228,85 +230,83 @@ async function approveToken(
 
   if (allowance >= amount) {
     logSeed(`approve ${tokenLabel}: skipped (allowance sufficient)`);
-    return;
+    return [];
   }
+
+  const hashes: Hex[] = [];
 
   if (token.toLowerCase() === USDT.toLowerCase()) {
     logSeed("approve USDT: step 1/2 approve(0)");
-    const resetHash = await walletClient.writeContract({
-      address: token,
-      abi: ERC20_ABI,
-      functionName: "approve",
-      args: [spender, 0n],
-      chain: foundry,
-    });
-    await publicClient.waitForTransactionReceipt({ hash: resetHash });
-    logSeed("approve USDT: step 1/2 done", { txHash: resetHash });
+    const resetHash = waitReceipt
+      ? await walletClient.writeContract({
+          address: token,
+          abi: ERC20_ABI,
+          functionName: "approve",
+          args: [spender, 0n],
+          chain: foundry,
+        })
+      : await sendContractTx(walletClient, {
+          address: token,
+          abi: ERC20_ABI,
+          functionName: "approve",
+          args: [spender, 0n],
+        });
+    hashes.push(resetHash);
+    if (waitReceipt) await publicClient.waitForTransactionReceipt({ hash: resetHash });
 
     logSeed("approve USDT: step 2/2 approve(amount)", { amount: amount.toString() });
-    const hash = await walletClient.writeContract({
-      address: token,
-      abi: ERC20_ABI,
-      functionName: "approve",
-      args: [spender, amount],
-      chain: foundry,
-    });
-    await publicClient.waitForTransactionReceipt({ hash: hash });
-    logSeed("approve USDT: step 2/2 done", { txHash: hash });
-    return;
+    const hash = waitReceipt
+      ? await walletClient.writeContract({
+          address: token,
+          abi: ERC20_ABI,
+          functionName: "approve",
+          args: [spender, amount],
+          chain: foundry,
+        })
+      : await sendContractTx(walletClient, {
+          address: token,
+          abi: ERC20_ABI,
+          functionName: "approve",
+          args: [spender, amount],
+        });
+    hashes.push(hash);
+    if (waitReceipt) await publicClient.waitForTransactionReceipt({ hash });
+    return hashes;
   }
 
   logSeed("approve WETH: approve(amount)", { amount: amount.toString() });
-  const hash = await walletClient.writeContract({
-    address: token,
-    abi: ERC20_ABI,
-    functionName: "approve",
-    args: [spender, amount],
-    chain: foundry,
-  });
-  await publicClient.waitForTransactionReceipt({ hash });
-  logSeed("approve WETH: done", { txHash: hash });
+  const hash = waitReceipt
+    ? await walletClient.writeContract({
+        address: token,
+        abi: ERC20_ABI,
+        functionName: "approve",
+        args: [spender, amount],
+        chain: foundry,
+      })
+    : await sendContractTx(walletClient, {
+        address: token,
+        abi: ERC20_ABI,
+        functionName: "approve",
+        args: [spender, amount],
+      });
+  hashes.push(hash);
+  if (waitReceipt) await publicClient.waitForTransactionReceipt({ hash });
+  return hashes;
 }
 
-async function seedOnePool(
+type SeedOptions = { waitReceipt?: boolean };
+
+async function sendAddLiquidityTx(
+  walletClient: ReturnType<typeof createWalletClient>,
+  liqRouter: Address,
   deployment: Deployment,
   pool: "hooked" | "plain",
-  actorId: ActorId,
+  signer: Address,
   wethWei: bigint,
   usdtRaw: bigint,
-): Promise<SeedLiquidityResult> {
-  const actor = getActorAccount(actorId);
-  const signer = actor.address;
+  waitReceipt: boolean,
+): Promise<Hex> {
   const publicClient = createPublicClient({ chain: foundry, transport: http(ANVIL_RPC) });
-  const walletClient = createWalletClient({
-    account: actor,
-    chain: foundry,
-    transport: http(ANVIL_RPC),
-  });
-  const liqRouter = deployment.addresses.liqRouter as Address;
-
-  logSeed(`--- seedOnePool start pool=${pool} actor=${actorId} ---`, {
-    signer,
-    liqRouter,
-    wethWei: wethWei.toString(),
-    usdtRaw: usdtRaw.toString(),
-  });
-  await logActorBalances("before funding", publicClient, signer, liqRouter);
-
-  logSeed("fund WETH via deposit()");
-  const wethFundTx = await fundWeth(walletClient, wethWei);
-  logSeed("fund WETH done", { txHash: wethFundTx });
-
-  logSeed("fund USDT via whale transfer");
-  const usdtFundTx = await fundUsdt(signer, usdtRaw);
-  logSeed("fund USDT done", { txHash: usdtFundTx });
-  await logActorBalances("after funding", publicClient, signer, liqRouter);
-
-  logSeed("approve tokens for liqRouter");
-  await approveToken(walletClient, publicClient, WETH, signer, liqRouter, wethWei);
-  await approveToken(walletClient, publicClient, USDT, signer, liqRouter, usdtRaw);
-  await logActorBalances("after approve", publicClient, signer, liqRouter);
-
   const poolId = (
     pool === "hooked" ? deployment.addresses.hookedPoolId : deployment.addresses.plainPoolId
   ) as Hex;
@@ -314,15 +314,33 @@ async function seedOnePool(
   const key = buildPoolKey(deployment, pool);
 
   logSeed("addLiquidityFromAmounts", {
+    pool,
     poolId,
     sqrtPriceX96: sqrtPriceX96.toString(),
-    tickLower: fullRangeTickLower(),
-    tickUpper: fullRangeTickUpper(),
-    key,
+    wethWei: wethWei.toString(),
+    usdtRaw: usdtRaw.toString(),
     payer: signer,
   });
 
-  const hash = await walletClient.writeContract({
+  if (waitReceipt) {
+    return walletClient.writeContract({
+      address: liqRouter,
+      abi: LIQ_ROUTER_ABI,
+      functionName: "addLiquidityFromAmounts",
+      args: [
+        key,
+        fullRangeTickLower(),
+        fullRangeTickUpper(),
+        sqrtPriceX96,
+        wethWei,
+        usdtRaw,
+        signer,
+      ],
+      chain: foundry,
+    });
+  }
+
+  return sendContractTx(walletClient, {
     address: liqRouter,
     abi: LIQ_ROUTER_ABI,
     functionName: "addLiquidityFromAmounts",
@@ -335,34 +353,39 @@ async function seedOnePool(
       usdtRaw,
       signer,
     ],
-    chain: foundry,
   });
-  logSeed("addLiquidityFromAmounts tx sent", { txHash: hash });
-  await publicClient.waitForTransactionReceipt({ hash });
-  logSeed(`--- seedOnePool done pool=${pool} ---`, { txHash: hash });
-
-  return {
-    pool,
-    txHash: hash,
-    weth: wethWei.toString(),
-    usdt: usdtRaw.toString(),
-  };
 }
 
 export async function seedLiquidity(
   deployment: Deployment,
   req: SeedLiquidityRequest,
+  options: SeedOptions = {},
 ): Promise<SeedLiquidityResult[]> {
-  const wethWei = parseEther(req.wethAmount);
-  const usdtRaw = BigInt(Math.round(Number(req.usdtAmount) * 1e6));
-
   logSeed("seedLiquidity called", {
     actorId: req.actorId,
     pool: req.pool,
     wethAmount: req.wethAmount,
     usdtAmount: req.usdtAmount,
+  });
+  const { results } = await seedLiquidityWithHashes(deployment, req, options);
+  logSeed("seedLiquidity finished OK", { pools: results.map((r) => r.pool) });
+  return results;
+}
+
+export async function seedLiquidityWithHashes(
+  deployment: Deployment,
+  req: SeedLiquidityRequest,
+  options: SeedOptions = {},
+): Promise<{ results: SeedLiquidityResult[]; txHashes: Hex[] }> {
+  const wethWei = parseEther(req.wethAmount);
+  const usdtRaw = BigInt(Math.round(Number(req.usdtAmount) * 1e6));
+
+  logSeed("seedLiquidityWithHashes", {
+    actorId: req.actorId,
+    pool: req.pool,
     wethWei: wethWei.toString(),
     usdtRaw: usdtRaw.toString(),
+    waitReceipt: options.waitReceipt !== false,
   });
 
   if (wethWei <= 0n || usdtRaw <= 0n) {
@@ -376,10 +399,72 @@ export async function seedLiquidity(
   const targets: Array<"hooked" | "plain"> =
     req.pool === "both" ? ["hooked", "plain"] : [req.pool];
 
+  const waitReceipt = options.waitReceipt !== false;
+  const poolCount = BigInt(targets.length);
+  const totalWethWei = wethWei * poolCount;
+  const totalUsdtRaw = usdtRaw * poolCount;
+
+  const actor = getActorAccount(req.actorId);
+  const signer = actor.address;
+  const publicClient = createPublicClient({ chain: foundry, transport: http(ANVIL_RPC) });
+  const walletClient = createWalletClient({
+    account: actor,
+    chain: foundry,
+    transport: http(ANVIL_RPC),
+  });
+  const liqRouter = deployment.addresses.liqRouter as Address;
+
+  logSeed("seedLiquidityWithHashes: batched funding", {
+    targets,
+    totalWethWei: totalWethWei.toString(),
+    totalUsdtRaw: totalUsdtRaw.toString(),
+    perPoolWethWei: wethWei.toString(),
+    perPoolUsdtRaw: usdtRaw.toString(),
+  });
+
+  const txHashes: Hex[] = [];
+
+  // No whale tx — USDT credited via storage so all remaining txs are from LP (correct order in one block).
+  logSeed("fund USDT via storage (total)");
+  await fundUsdtDirect(signer, totalUsdtRaw);
+
+  logSeed("fund WETH via deposit() (total)");
+  txHashes.push(await fundWeth(walletClient, totalWethWei, waitReceipt));
+  await logActorBalances("after funding", publicClient, signer, liqRouter);
+
+  logSeed("approve tokens for liqRouter (total)");
+  txHashes.push(
+    ...(await approveToken(walletClient, publicClient, WETH, signer, liqRouter, totalWethWei, waitReceipt)),
+  );
+  txHashes.push(
+    ...(await approveToken(walletClient, publicClient, USDT, signer, liqRouter, totalUsdtRaw, waitReceipt)),
+  );
+  await logActorBalances("after approve", publicClient, signer, liqRouter);
+
   const results: SeedLiquidityResult[] = [];
-  for (const target of targets) {
-    results.push(await seedOnePool(deployment, target, req.actorId, wethWei, usdtRaw));
+  for (const pool of targets) {
+    const hash = await sendAddLiquidityTx(
+      walletClient,
+      liqRouter,
+      deployment,
+      pool,
+      signer,
+      wethWei,
+      usdtRaw,
+      waitReceipt,
+    );
+    txHashes.push(hash);
+    if (waitReceipt) {
+      await publicClient.waitForTransactionReceipt({ hash });
+    }
+    logSeed(`addLiquidityFromAmounts tx sent pool=${pool}`, { txHash: hash });
+    results.push({
+      pool,
+      txHash: hash,
+      weth: wethWei.toString(),
+      usdt: usdtRaw.toString(),
+    });
   }
-  logSeed("seedLiquidity finished OK", { pools: results.map((r) => r.pool) });
-  return results;
+
+  return { results, txHashes };
 }
