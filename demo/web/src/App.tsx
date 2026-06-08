@@ -278,11 +278,11 @@ export default function App() {
             <Badge tone="plain">Plain v4 pool</Badge>
           </div>
           <h1 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">
-            UHI9 Keeper Simulation
+            Devia IL Simulation
           </h1>
           <p className="mt-3 text-base leading-relaxed text-zinc-400">
-            Interactive replay of the integration scenario: two pools on a mainnet fork, scripted
-            actors, fee routing to LPs and keepers — no wallet extension required.
+            Compare hooked vs plain WETH/USDT pools on a mainnet fork — dynamic fees and keeper
+            sync pull price toward the oracle and reduce LP impermanent loss.
           </p>
         </div>
 
@@ -378,19 +378,6 @@ export default function App() {
               value={ready && state.blocks?.poolSyncBlock != null ? String(state.blocks.poolSyncBlock) : "—"}
             />
             <Metric label="Reference ETH" value={oracleDisplay} hint="USDT per 1 WETH (on-chain Pyth)" />
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Metric
-              label="Hooked pool"
-              value={ready ? shortenAddress(state.deployment.addresses.dynamicFeeHook) : "—"}
-              hint={ready && state.liquiditySeeded.hooked ? "Liquidity seeded" : "DynamicFee hook"}
-            />
-            <Metric
-              label="Plain pool"
-              value={ready ? shortenAddress(state.deployment.addresses.poolManager) : "—"}
-              hint={ready && state.liquiditySeeded.plain ? "Liquidity seeded" : "v4 PoolManager"}
-            />
           </div>
 
           <div className="grid gap-5 lg:grid-cols-2">
