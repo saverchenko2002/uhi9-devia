@@ -81,6 +81,29 @@ const LIQ_ROUTER_ABI = [
     outputs: [{ name: "delta", type: "int256" }],
     stateMutability: "payable",
   },
+  {
+    type: "function",
+    name: "removeAllLiquidity",
+    inputs: [
+      {
+        name: "key",
+        type: "tuple",
+        components: [
+          { name: "currency0", type: "address" },
+          { name: "currency1", type: "address" },
+          { name: "fee", type: "uint24" },
+          { name: "tickSpacing", type: "int24" },
+          { name: "hooks", type: "address" },
+        ],
+      },
+      { name: "tickLower", type: "int24" },
+      { name: "tickUpper", type: "int24" },
+      { name: "liquidity", type: "uint128" },
+      { name: "recipient", type: "address" },
+    ],
+    outputs: [{ name: "delta", type: "int256" }],
+    stateMutability: "nonpayable",
+  },
 ] as const;
 
 export type PoolTarget = "hooked" | "plain" | "both";
@@ -425,4 +448,191 @@ export async function seedLiquidityWithHashes(
   }
 
   return { results, txHashes };
+}
+
+export type WithdrawLiquidityResult = {
+  pool: "hooked" | "plain";
+  txHash: Hex;
+  wethWithdrawn: bigint;
+  usdtWithdrawn: bigint;
+  beforeWeth: bigint;
+  beforeUsdt: bigint;
+};
+
+export type WithdrawLiquidityPending = {
+  pool: "hooked" | "plain";
+  txHash: Hex;
+  beforeWeth: bigint;
+  beforeUsdt: bigint;
+};
+
+const ERC20_TRANSFER_ABI = [
+  {
+    type: "event",
+    name: "Transfer",
+    inputs: [
+      { name: "from", type: "address", indexed: true },
+      { name: "to", type: "address", indexed: true },
+      { name: "value", type: "uint256", indexed: false },
+    ],
+  },
+] as const;
+
+/** Sum ERC20 Transfer logs to `recipient` in a mined withdraw receipt. */
+export async function measureWithdrawFromReceipt(
+  txHash: Hex,
+  recipient: Address,
+): Promise<{ wethWithdrawn: bigint; usdtWithdrawn: bigint }> {
+  const { parseEventLogs } = await import("viem");
+  const client = createPublicClient({ chain: foundry, transport: http(ANVIL_RPC) });
+  const receipt = await client.getTransactionReceipt({ hash: txHash });
+  if (!receipt) {
+    throw new Error(`Withdraw receipt not found: ${txHash}`);
+  }
+  if (receipt.status === "reverted") {
+    throw new Error(`Withdraw transaction reverted: ${txHash}`);
+  }
+
+  const logs = parseEventLogs({ abi: ERC20_TRANSFER_ABI, logs: receipt.logs, eventName: "Transfer" });
+
+  let wethWithdrawn = 0n;
+  let usdtWithdrawn = 0n;
+  for (const log of logs) {
+    const to = log.args.to as Address;
+    if (to.toLowerCase() !== recipient.toLowerCase()) continue;
+    const value = log.args.value as bigint;
+    if (log.address.toLowerCase() === WETH.toLowerCase()) wethWithdrawn += value;
+    if (log.address.toLowerCase() === USDT.toLowerCase()) usdtWithdrawn += value;
+  }
+
+  return { wethWithdrawn, usdtWithdrawn };
+}
+
+export async function finalizeWithdrawDelta(
+  pending: WithdrawLiquidityPending,
+  lpAddress: Address,
+): Promise<WithdrawLiquidityResult> {
+  const client = createPublicClient({ chain: foundry, transport: http(ANVIL_RPC) });
+  const after = await readTokenBalances(client, lpAddress);
+  return {
+    pool: pending.pool,
+    txHash: pending.txHash,
+    wethWithdrawn: after.weth > pending.beforeWeth ? after.weth - pending.beforeWeth : 0n,
+    usdtWithdrawn: after.usdt > pending.beforeUsdt ? after.usdt - pending.beforeUsdt : 0n,
+  };
+}
+
+export async function sendWithdrawAllPoolLiquidity(
+  deployment: Deployment,
+  pool: "hooked" | "plain",
+  actorId: ActorId = "lp",
+): Promise<WithdrawLiquidityPending> {
+  const result = await withdrawAllPoolLiquidity(deployment, pool, actorId, false);
+  return {
+    pool: result.pool,
+    txHash: result.txHash,
+    beforeWeth: result.beforeWeth,
+    beforeUsdt: result.beforeUsdt,
+  };
+}
+
+async function readTokenBalances(
+  client: ReturnType<typeof createPublicClient>,
+  owner: Address,
+): Promise<{ weth: bigint; usdt: bigint }> {
+  const [weth, usdt] = await Promise.all([
+    client.readContract({
+      address: WETH,
+      abi: ERC20_ABI,
+      functionName: "balanceOf",
+      args: [owner],
+    }),
+    client.readContract({
+      address: USDT,
+      abi: ERC20_ABI,
+      functionName: "balanceOf",
+      args: [owner],
+    }),
+  ]);
+  return { weth, usdt };
+}
+
+export async function withdrawAllPoolLiquidity(
+  deployment: Deployment,
+  pool: "hooked" | "plain",
+  actorId: ActorId = "lp",
+  waitReceipt = false,
+): Promise<WithdrawLiquidityResult> {
+  const actor = getActorAccount(actorId);
+  const publicClient = createPublicClient({ chain: foundry, transport: http(ANVIL_RPC) });
+  const walletClient = createWalletClient({
+    account: actor,
+    chain: foundry,
+    transport: http(ANVIL_RPC),
+  });
+  const liqRouter = deployment.addresses.liqRouter as Address;
+
+  const { readPoolSnapshots } = await import("./pools.js");
+  const snapshots = await readPoolSnapshots(deployment);
+  const snap = pool === "hooked" ? snapshots.hooked : snapshots.plain;
+  const liquidity = BigInt(snap.liquidity);
+
+  if (liquidity === 0n) {
+    throw new Error(`${pool} pool has no liquidity to withdraw`);
+  }
+
+  const before = await readTokenBalances(publicClient, actor.address);
+  const key = buildPoolKey(deployment, pool);
+  const liquidity128 = liquidity > (1n << 128n) - 1n ? (1n << 128n) - 1n : liquidity;
+
+  const hash = waitReceipt
+    ? await walletClient.writeContract({
+        address: liqRouter,
+        abi: LIQ_ROUTER_ABI,
+        functionName: "removeAllLiquidity",
+        args: [
+          key,
+          fullRangeTickLower(),
+          fullRangeTickUpper(),
+          liquidity128,
+          actor.address,
+        ],
+        chain: foundry,
+      })
+    : await sendContractTx(walletClient, {
+        address: liqRouter,
+        abi: LIQ_ROUTER_ABI,
+        functionName: "removeAllLiquidity",
+        args: [
+          key,
+          fullRangeTickLower(),
+          fullRangeTickUpper(),
+          liquidity128,
+          actor.address,
+        ],
+      });
+
+  if (waitReceipt) await publicClient.waitForTransactionReceipt({ hash });
+
+  if (!waitReceipt) {
+    return {
+      pool,
+      txHash: hash,
+      wethWithdrawn: 0n,
+      usdtWithdrawn: 0n,
+      beforeWeth: before.weth,
+      beforeUsdt: before.usdt,
+    };
+  }
+
+  const after = await readTokenBalances(publicClient, actor.address);
+
+  return {
+    pool,
+    txHash: hash,
+    wethWithdrawn: after.weth > before.weth ? after.weth - before.weth : 0n,
+    usdtWithdrawn: after.usdt > before.usdt ? after.usdt - before.usdt : 0n,
+    beforeWeth: before.weth,
+    beforeUsdt: before.usdt,
+  };
 }

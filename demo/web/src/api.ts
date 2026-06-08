@@ -226,6 +226,66 @@ export type PlainArbResult = {
   profitBreakdownUsdt?: ProfitBreakdownUsdt;
 };
 
+export type LpSnapshotUsdt = {
+  wethRaw: string;
+  usdtRaw: string;
+  weth: number;
+  usdt: number;
+  valueUsdt: number;
+};
+
+export type PoolFeesReport = {
+  totalFeeUsdt: number;
+  lpShareUsdt: number;
+  syncShareUsdt: number;
+  feedShareUsdt: number;
+  swapCount: number;
+};
+
+export type SideReport = {
+  pool: "plain" | "hooked";
+  initialLp: LpSnapshotUsdt;
+  extractedLp: LpSnapshotUsdt;
+  ilUsdt: number;
+  swapFees: PoolFeesReport;
+};
+
+export type ActorProfits = {
+  plainArbUsdt: number;
+  syncKeeperArbUsdt: number;
+  syncKeeperSwapFeesUsdt: number;
+  syncKeeperTotalUsdt: number;
+  feedKeeperSwapFeesUsdt: number;
+  poolDonationUsdt: number;
+};
+
+export type DistributionFlow = {
+  label: string;
+  amountUsdt: number;
+  tone: "lp" | "pool" | "sync" | "feed" | "arb";
+};
+
+export type LpComparisonSummary = {
+  depositUsdt: number;
+  plainExtractedUsdt: number;
+  hookedExtractedUsdt: number;
+  plainNetUsdt: number;
+  hookedNetUsdt: number;
+  hookedAdvantageUsdt: number;
+};
+
+export type ComparisonReport = {
+  valuationPriceScaled: string;
+  plain: SideReport;
+  hooked: SideReport;
+  actors: ActorProfits;
+  lpComparison?: LpComparisonSummary;
+  plainFlow: DistributionFlow[];
+  hookedFlow: DistributionFlow[];
+  txHashes: string[];
+  collectedAtBlock: number;
+};
+
 export type DemoState = {
   deployment: Deployment;
   anvilReady?: boolean;
@@ -241,6 +301,7 @@ export type DemoState = {
   syncKeeperStatus?: SyncKeeperChainStatus | null;
   accumulatedFees?: AccumulatedFees;
   pools?: { hooked: PoolSnapshot; plain: PoolSnapshot };
+  lastReport?: ComparisonReport | null;
 };
 
 export type LiquidityDefaults = {
@@ -393,5 +454,16 @@ function normalizeState(json: Record<string, unknown>): DemoState {
       hooked: { totalFeeUsdt: 0, lpShareUsdt: 0, syncShareUsdt: 0, feedShareUsdt: 0, swapCount: 0 },
     },
     pools: json.pools as DemoState["pools"],
+    lastReport: (json.lastReport as ComparisonReport | null) ?? null,
+  };
+}
+
+export async function collectReport(): Promise<DemoState & { report: ComparisonReport }> {
+  const res = await fetch(`${API}/api/report/collect`, { method: "POST" });
+  const json = await res.json();
+  if (!json.ok) throw new Error(json.error ?? "report collect failed");
+  return {
+    ...normalizeState(json),
+    report: json.report as ComparisonReport,
   };
 }

@@ -45,6 +45,13 @@ import {
 } from "./syncKeeper.js";
 import { readSyncKeeperStatus } from "./syncKeeperStatus.js";
 import { waitForAllReceipts } from "./tx.js";
+import { getActorAccount } from "./accounts.js";
+import {
+  finalizeWithdrawDelta,
+  sendWithdrawAllPoolLiquidity,
+} from "./liquidity.js";
+import { buildComparisonReport, type ComparisonReport } from "./report.js";
+import { claimKeeperTreasury } from "./treasury.js";
 
 const PORT = 8787;
 
@@ -76,6 +83,7 @@ let lastSwap: SwapResult[] = [];
 let lastPoolSync: SyncKeeperResult | null = null;
 let lastPlainArb: PlainArbResult | null = null;
 let accumulatedFees: AccumulatedFees = emptyAccumulatedFees();
+let lastReport: ComparisonReport | null = null;
 
 function emptyPools() {
   return { hooked: emptyPoolSnapshot("hooked"), plain: emptyPoolSnapshot("plain") };
@@ -121,6 +129,7 @@ async function statePayload(extra: Record<string, unknown> = {}) {
     lastPoolSync,
     lastPlainArb,
     accumulatedFees,
+    lastReport,
     blocks: getBlockState(),
     syncKeeperStatus,
     ...extra,
@@ -150,6 +159,7 @@ app.post("/api/init", async (_req, res) => {
     lastPoolSync = null;
     lastPlainArb = null;
     accumulatedFees = emptyAccumulatedFees();
+    lastReport = null;
     resetBlockState(deployment.forkBlock);
     await syncCurrentBlockFromChain();
     await configureDemoMining();
@@ -508,6 +518,80 @@ app.post("/api/oracle/price", async (req, res) => {
 
     const pools = await readPoolsSafe();
     res.json(await statePayload({ pools }));
+  } catch (err) {
+    await configureDemoMining(false).catch(() => undefined);
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ ok: false, error: message });
+  }
+});
+
+app.post("/api/report/collect", async (_req, res) => {
+  if (!deployment) {
+    res.status(503).json({ ok: false, error: "Call POST /api/init first" });
+    return;
+  }
+  if (!liquiditySeeded.hooked || !liquiditySeeded.plain) {
+    res.status(400).json({ ok: false, error: "Seed both pools first" });
+    return;
+  }
+  if (!lastPlainArb) {
+    res.status(400).json({ ok: false, error: "Complete plain arb (step 05) before collecting report" });
+    return;
+  }
+  if (lastReport) {
+    res.status(400).json({ ok: false, error: "Report already collected — POST /api/init to reset" });
+    return;
+  }
+
+  try {
+    const txHashes: Hex[] = [];
+    const lpAddress = getActorAccount("lp").address;
+    let lastBlock = 0;
+
+    let syncTreasury!: Awaited<ReturnType<typeof claimKeeperTreasury>>;
+    let feedTreasury!: Awaited<ReturnType<typeof claimKeeperTreasury>>;
+
+    lastBlock = await runBlockOperation(async () => {
+      syncTreasury = await claimKeeperTreasury(deployment!, "syncKeeper", false);
+      feedTreasury = await claimKeeperTreasury(deployment!, "feedKeeper", false);
+      txHashes.push(...syncTreasury.txHashes, ...feedTreasury.txHashes);
+    });
+    await waitForAllReceipts([...syncTreasury.txHashes, ...feedTreasury.txHashes]);
+
+    let plainPending!: Awaited<ReturnType<typeof sendWithdrawAllPoolLiquidity>>;
+    lastBlock = await runBlockOperation(async () => {
+      plainPending = await sendWithdrawAllPoolLiquidity(deployment!, "plain");
+      txHashes.push(plainPending.txHash);
+    });
+    await waitForAllReceipts([plainPending.txHash]);
+    const plainWithdraw = await finalizeWithdrawDelta(plainPending, lpAddress);
+
+    let hookedPending!: Awaited<ReturnType<typeof sendWithdrawAllPoolLiquidity>>;
+    lastBlock = await runBlockOperation(async () => {
+      hookedPending = await sendWithdrawAllPoolLiquidity(deployment!, "hooked");
+      txHashes.push(hookedPending.txHash);
+    });
+    await waitForAllReceipts([hookedPending.txHash]);
+    const hookedWithdraw = await finalizeWithdrawDelta(hookedPending, lpAddress);
+
+    lastReport = buildComparisonReport({
+      oraclePriceScaled: BigInt(oraclePriceScaled),
+      lastLiquiditySeed,
+      lastPoolSync,
+      lastPlainArb,
+      accumulatedFees,
+      syncTreasury,
+      feedTreasury,
+      plainWithdraw,
+      hookedWithdraw,
+      txHashes,
+      collectedAtBlock: lastBlock,
+    });
+
+    liquiditySeeded = { hooked: false, plain: false };
+
+    const pools = await readPoolsSafe();
+    res.json(await statePayload({ report: lastReport, blockNumber: lastBlock, pools }));
   } catch (err) {
     await configureDemoMining(false).catch(() => undefined);
     const message = err instanceof Error ? err.message : String(err);

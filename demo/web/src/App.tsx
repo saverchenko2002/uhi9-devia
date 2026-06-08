@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  collectReport,
   executeKeeperSync,
   executePlainArb,
   executeSwap,
@@ -19,6 +20,9 @@ import {
   type DemoState,
   type PoolTarget,
   type FeeSplitPreview,
+  type ComparisonReport,
+  type DistributionFlow,
+  type LpComparisonSummary,
   type PlainArbPreview,
   type ProfitBreakdownUsdt,
   type SwapFeePreview,
@@ -36,6 +40,7 @@ const PIPELINE = [
   { step: "03", label: "Public swaps", detail: "Fee split to actors" },
   { step: "04", label: "Keeper sync", detail: "executeWithIntent" },
   { step: "05", label: "Plain arb", detail: "Stale price → oracle" },
+  { step: "06", label: "Collect report", detail: "IL & distribution" },
 ];
 
 export default function App() {
@@ -62,6 +67,7 @@ export default function App() {
   const [plainArbPreview, setPlainArbPreview] = useState<PlainArbPreview | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [plainArbing, setPlainArbing] = useState(false);
+  const [collectingReport, setCollectingReport] = useState(false);
   const swapPreviewRequestId = useRef(0);
   const syncPreviewRequestId = useRef(0);
   const plainArbPreviewRequestId = useRef(0);
@@ -268,6 +274,20 @@ export default function App() {
     }
   }
 
+  async function handleCollectReport() {
+    if (!state) return;
+    setCollectingReport(true);
+    setError(null);
+    try {
+      const next = await collectReport();
+      setState(next);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCollectingReport(false);
+    }
+  }
+
   async function handleExecuteSwap() {
     if (!state) return;
     setSwapping(true);
@@ -301,6 +321,7 @@ export default function App() {
     if (stepIndex === 2) return (state.lastSwap?.length ?? 0) > 0;
     if (stepIndex === 3) return state.lastPoolSync != null;
     if (stepIndex === 4) return state.lastPlainArb != null;
+    if (stepIndex === 5) return state?.lastReport != null;
     return false;
   }
 
@@ -326,6 +347,360 @@ export default function App() {
 
   function formatKeeperFeePips(feePips: number): string {
     return `${((feePips / 1_000_000) * 100).toFixed(3)}%`;
+  }
+
+  function formatIlUsdt(value: number): string {
+    if (!Number.isFinite(value)) return "—";
+    const prefix = value > 0 ? "+" : "";
+    if (Math.abs(value) >= 1000) {
+      return `${prefix}${formatUsdtTvl(value)}`;
+    }
+    return `${prefix}${formatFeeUsdt(value)}`;
+  }
+
+  function flowToneClass(tone: DistributionFlow["tone"]): string {
+    switch (tone) {
+      case "lp":
+        return "bg-cyan-500/80";
+      case "pool":
+        return "bg-emerald-500/80";
+      case "sync":
+        return "bg-violet-500/80";
+      case "feed":
+        return "bg-amber-500/80";
+      case "arb":
+        return "bg-orange-500/80";
+      default:
+        return "bg-zinc-500/80";
+    }
+  }
+
+  function DistributionFlowChart({
+    title,
+    subtitle,
+    flows,
+  }: {
+    title: string;
+    subtitle: string;
+    flows: DistributionFlow[];
+  }) {
+    const total = flows.reduce((sum, f) => sum + f.amountUsdt, 0);
+    if (total <= 0) return null;
+
+    return (
+      <div className="rounded-xl border border-zinc-800/80 bg-zinc-950/50 p-4">
+        <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">{title}</p>
+        <p className="mb-4 mt-1 text-sm text-zinc-400">{subtitle}</p>
+        <div className="mb-4 flex h-3 overflow-hidden rounded-full bg-zinc-900">
+          {flows.map((flow) => (
+            <div
+              key={flow.label}
+              className={`${flowToneClass(flow.tone)} h-full transition-all`}
+              style={{ width: `${(flow.amountUsdt / total) * 100}%` }}
+              title={`${flow.label}: ${formatFeeUsdt(flow.amountUsdt)}`}
+            />
+          ))}
+        </div>
+        <div className="space-y-2">
+          {flows.map((flow) => (
+            <div key={flow.label} className="flex items-center justify-between gap-3 text-sm">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${flowToneClass(flow.tone)}`} />
+                <span className="truncate text-zinc-400">{flow.label}</span>
+              </div>
+              <span className="shrink-0 font-mono text-zinc-200">{formatFeeUsdt(flow.amountUsdt)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  function lpComparison(report: ComparisonReport): LpComparisonSummary {
+    if (report.lpComparison) return report.lpComparison;
+    return {
+      depositUsdt: report.plain.initialLp.valueUsdt,
+      plainExtractedUsdt: report.plain.extractedLp.valueUsdt,
+      hookedExtractedUsdt: report.hooked.extractedLp.valueUsdt,
+      plainNetUsdt: report.plain.ilUsdt,
+      hookedNetUsdt: report.hooked.ilUsdt,
+      hookedAdvantageUsdt: report.hooked.ilUsdt - report.plain.ilUsdt,
+    };
+  }
+
+  function IlComparisonCharts({ report }: { report: ComparisonReport }) {
+    const cmp = lpComparison(report);
+    const deposit = cmp.depositUsdt;
+    const chartMax = Math.max(
+      deposit,
+      cmp.plainExtractedUsdt,
+      cmp.hookedExtractedUsdt,
+      1,
+    );
+    const barHeight = (value: number) =>
+      `${Math.max(2, (value / chartMax) * 100)}%`;
+
+    const netMax = Math.max(
+      Math.abs(cmp.plainNetUsdt),
+      Math.abs(cmp.hookedNetUsdt),
+      1,
+    );
+    const netBarWidth = (value: number) =>
+      `${Math.max(2, (Math.abs(value) / netMax) * 100)}%`;
+
+    const hookedBetter = cmp.hookedAdvantageUsdt > 0.001;
+    const sameOutcome = Math.abs(cmp.hookedAdvantageUsdt) <= 0.001;
+
+    return (
+      <div className="space-y-5 rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4">
+        <div>
+          <p className="text-xs font-medium uppercase tracking-wide text-cyan-400/90">
+            LP outcome comparison
+          </p>
+          <p className="mt-2 text-sm leading-relaxed text-zinc-400">
+            Deposit per pool:{" "}
+            <span className="font-mono text-zinc-200">{formatFeeUsdt(deposit)}</span>
+            {" "}({formatTokenAmount(report.plain.initialLp.weth)} WETH +{" "}
+            {formatTokenAmount(report.plain.initialLp.usdt)} USDT @ oracle).{" "}
+            <strong className="font-normal text-zinc-300">LP net</strong> = liquidity
+            extracted − deposit — not classical IL alone; it includes swap fees, sync
+            donation (hooked), and value taken by arbers.
+          </p>
+        </div>
+
+        <div
+          className={`rounded-lg border px-4 py-3 text-sm ${
+            hookedBetter
+              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-100"
+              : sameOutcome
+                ? "border-zinc-700 bg-zinc-900/60 text-zinc-300"
+                : "border-amber-500/30 bg-amber-500/10 text-amber-100"
+          }`}
+        >
+          {sameOutcome ? (
+            <span>Plain and hooked LPs ended with the same net outcome.</span>
+          ) : hookedBetter ? (
+            <span>
+              Hooked LPs retained{" "}
+              <span className="font-mono font-semibold">
+                {formatFeeUsdt(cmp.hookedAdvantageUsdt)}
+              </span>{" "}
+              more than plain — mainly from sync donation (
+              {formatFeeUsdt(report.actors.poolDonationUsdt)}) returning arb profit to
+              the pool.
+            </span>
+          ) : (
+            <span>
+              Plain LPs did better by{" "}
+              <span className="font-mono font-semibold">
+                {formatFeeUsdt(-cmp.hookedAdvantageUsdt)}
+              </span>{" "}
+              in this run (unusual — check pool sizing / deviation).
+            </span>
+          )}
+        </div>
+
+        <div className="grid gap-6 lg:grid-cols-2">
+          <div>
+            <p className="mb-4 text-xs font-medium uppercase tracking-wide text-zinc-500">
+              Deposit vs liquidity extracted
+            </p>
+            <div className="flex items-end justify-center gap-8 px-2" style={{ height: 180 }}>
+              <div className="flex flex-col items-center gap-2">
+                <div className="flex h-40 w-20 items-end justify-center gap-1">
+                  <div
+                    className="w-8 rounded-t bg-amber-500/40"
+                    style={{ height: barHeight(deposit) }}
+                    title={`Deposit ${formatFeeUsdt(deposit)}`}
+                  />
+                  <div
+                    className="w-8 rounded-t bg-amber-400"
+                    style={{ height: barHeight(cmp.plainExtractedUsdt) }}
+                    title={`Extracted ${formatFeeUsdt(cmp.plainExtractedUsdt)}`}
+                  />
+                </div>
+                <span className="text-xs text-amber-400/90">Plain</span>
+              </div>
+              <div className="flex flex-col items-center gap-2">
+                <div className="flex h-40 w-20 items-end justify-center gap-1">
+                  <div
+                    className="w-8 rounded-t bg-violet-500/40"
+                    style={{ height: barHeight(deposit) }}
+                    title={`Deposit ${formatFeeUsdt(deposit)}`}
+                  />
+                  <div
+                    className="w-8 rounded-t bg-violet-400"
+                    style={{ height: barHeight(cmp.hookedExtractedUsdt) }}
+                    title={`Extracted ${formatFeeUsdt(cmp.hookedExtractedUsdt)}`}
+                  />
+                </div>
+                <span className="text-xs text-violet-400">Hooked</span>
+              </div>
+            </div>
+            <div className="mt-3 flex justify-center gap-6 text-xs text-zinc-500">
+              <span className="flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-sm bg-zinc-500/40" /> deposit
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-sm bg-cyan-400" /> extracted
+              </span>
+            </div>
+          </div>
+
+          <div>
+            <p className="mb-4 text-xs font-medium uppercase tracking-wide text-zinc-500">
+              LP net outcome (extracted − deposit)
+            </p>
+            <div className="space-y-4 pt-4">
+              <div>
+                <div className="mb-1 flex justify-between text-xs">
+                  <span className="text-amber-400/90">Plain</span>
+                  <span className="font-mono text-zinc-300">{formatIlUsdt(cmp.plainNetUsdt)}</span>
+                </div>
+                <div className="h-3 overflow-hidden rounded-full bg-zinc-900">
+                  <div
+                    className="h-full rounded-full bg-amber-500/80"
+                    style={{ width: netBarWidth(cmp.plainNetUsdt) }}
+                  />
+                </div>
+              </div>
+              <div>
+                <div className="mb-1 flex justify-between text-xs">
+                  <span className="text-violet-400">Hooked</span>
+                  <span className="font-mono text-zinc-300">{formatIlUsdt(cmp.hookedNetUsdt)}</span>
+                </div>
+                <div className="h-3 overflow-hidden rounded-full bg-zinc-900">
+                  <div
+                    className="h-full rounded-full bg-violet-500/80"
+                    style={{ width: netBarWidth(cmp.hookedNetUsdt) }}
+                  />
+                </div>
+              </div>
+              <div className="border-t border-zinc-800 pt-3 text-xs leading-relaxed text-zinc-500">
+                <p className="mb-2 font-medium text-zinc-400">What moves hooked vs plain LP net?</p>
+                <ul className="list-inside list-disc space-y-1">
+                  <li>
+                    <span className="text-emerald-400/90">minDonateBps</span> — share of sync
+                    arb donated back to hooked pool
+                  </li>
+                  <li>Arb size vs pool TVL (deviation before sync / plain arb)</li>
+                  <li>Swap fee split — plain 100% LP; hooked shares with sync &amp; feed keepers</li>
+                  <li>Plain arb takes 100% of mispricing; hooked splits with pool via donation</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function ReportComparisonPanel({ report }: { report: ComparisonReport }) {
+    return (
+      <div className="space-y-6">
+        <IlComparisonCharts report={report} />
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
+            <p className="mb-3 text-xs font-medium uppercase tracking-wide text-amber-600/90">
+              Plain pool
+            </p>
+            <Metric
+              label="Swap fees → LP"
+              value={formatFeeUsdt(report.plain.swapFees.lpShareUsdt)}
+              hint={`${report.plain.swapFees.swapCount} swap(s) · 100% to LPs (in reserves)`}
+            />
+            <div className="mt-3 border-t border-amber-500/10 pt-3">
+              <Metric
+                label="Liquidity extracted"
+                value={formatFeeUsdt(report.plain.extractedLp.valueUsdt)}
+                hint={`${formatTokenAmount(report.plain.extractedLp.weth)} WETH + ${formatTokenAmount(report.plain.extractedLp.usdt)} USDT @ oracle`}
+              />
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-4">
+            <p className="mb-3 text-xs font-medium uppercase tracking-wide text-violet-400">
+              Hooked pool
+            </p>
+            <Metric
+              label="Swap fees → LP"
+              value={formatFeeUsdt(report.hooked.swapFees.lpShareUsdt)}
+              hint={`${report.hooked.swapFees.swapCount} swap(s) · LP share from public swaps`}
+            />
+            <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+              <div className="rounded-lg bg-zinc-950/60 px-3 py-2">
+                <p className="text-xs text-zinc-500">→ Sync keeper</p>
+                <p className="font-mono text-zinc-200">{formatFeeUsdt(report.hooked.swapFees.syncShareUsdt)}</p>
+              </div>
+              <div className="rounded-lg bg-zinc-950/60 px-3 py-2">
+                <p className="text-xs text-zinc-500">→ Feed keeper</p>
+                <p className="font-mono text-zinc-200">{formatFeeUsdt(report.hooked.swapFees.feedShareUsdt)}</p>
+              </div>
+            </div>
+            <div className="mt-3 border-t border-violet-500/10 pt-3">
+              <Metric
+                label="Liquidity extracted"
+                value={formatFeeUsdt(report.hooked.extractedLp.valueUsdt)}
+                hint={`${formatTokenAmount(report.hooked.extractedLp.weth)} WETH + ${formatTokenAmount(report.hooked.extractedLp.usdt)} USDT · incl. sync donation`}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-zinc-800/80 bg-zinc-950/50 p-4">
+          <p className="mb-3 text-xs font-medium uppercase tracking-wide text-zinc-500">
+            Actor profits (USDT @ oracle)
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-lg border border-orange-500/20 bg-orange-500/5 px-3 py-3">
+              <p className="text-xs text-orange-400/90">Plain arbitrageur</p>
+              <p className="mt-1 font-mono text-lg text-zinc-100">
+                {formatFeeUsdt(report.actors.plainArbUsdt)}
+              </p>
+              <p className="mt-1 text-xs text-zinc-500">100% of plain-pool arb</p>
+            </div>
+            <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-3 py-3">
+              <p className="text-xs text-violet-400">Sync keeper</p>
+              <p className="mt-1 font-mono text-lg text-zinc-100">
+                {formatFeeUsdt(report.actors.syncKeeperTotalUsdt)}
+              </p>
+              <p className="mt-1 text-xs text-zinc-500">
+                Arb {formatFeeUsdt(report.actors.syncKeeperArbUsdt)} + fees{" "}
+                {formatFeeUsdt(report.actors.syncKeeperSwapFeesUsdt)}
+              </p>
+            </div>
+            <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-3">
+              <p className="text-xs text-amber-400/90">Feed keeper</p>
+              <p className="mt-1 font-mono text-lg text-zinc-100">
+                {formatFeeUsdt(report.actors.feedKeeperSwapFeesUsdt)}
+              </p>
+              <p className="mt-1 text-xs text-zinc-500">Public swap fee share</p>
+            </div>
+            <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-3">
+              <p className="text-xs text-emerald-400/90">Pool donation</p>
+              <p className="mt-1 font-mono text-lg text-zinc-100">
+                {formatFeeUsdt(report.actors.poolDonationUsdt)}
+              </p>
+              <p className="mt-1 text-xs text-zinc-500">Hooked sync arb → LP</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <DistributionFlowChart
+            title="Plain pool · value flow"
+            subtitle="MEV arb captures mispricing; LPs keep fees inside withdrawn liquidity"
+            flows={report.plainFlow}
+          />
+          <DistributionFlowChart
+            title="Hooked pool · value flow"
+            subtitle="Sync splits arb with pool donation; keepers earn swap-fee shares"
+            flows={report.hookedFlow}
+          />
+        </div>
+      </div>
+    );
   }
 
   function ProfitBreakdownPanel({
@@ -1036,6 +1411,44 @@ export default function App() {
                   />
                 </div>
               )}
+            </Card>
+
+            <Card
+              title="IL comparison report"
+              subtitle="Claim keeper fees, burn LP on both pools, compare who captured value"
+              badge={<Badge tone="hooked">Step 06</Badge>}
+              accent="hooked"
+              className="lg:col-span-2"
+            >
+              <p className="text-sm text-zinc-400">
+                Claims sync &amp; feed keeper treasury, burns LP on plain then hooked pool (3 blocks),
+                then compares fees, liquidity extracted, and who captured arb value.
+              </p>
+
+              <Button
+                variant="primary"
+                className="mt-4 w-full"
+                onClick={handleCollectReport}
+                disabled={
+                  !ready ||
+                  collectingReport ||
+                  !state?.lastPlainArb ||
+                  !!state?.lastReport
+                }
+              >
+                {collectingReport && <span className="spinner" />}
+                {collectingReport
+                  ? "Collecting report…"
+                  : state?.lastReport
+                    ? "Report collected"
+                    : "Collect IL report (3 blocks)"}
+              </Button>
+
+              {!state?.lastPlainArb && (
+                <p className="mt-3 text-xs text-zinc-500">Complete step 05 (plain arb) first.</p>
+              )}
+
+              {state?.lastReport && <ReportComparisonPanel report={state.lastReport} />}
             </Card>
           </div>
 
