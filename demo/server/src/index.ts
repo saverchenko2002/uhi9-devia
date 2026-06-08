@@ -32,6 +32,12 @@ import {
   type SwapResult,
 } from "./swap.js";
 import {
+  executePlainArb,
+  finalizePlainArbResult,
+  previewPlainArb,
+  type PlainArbResult,
+} from "./plainArb.js";
+import {
   executeKeeperSync,
   finalizeKeeperSyncResult,
   previewKeeperSync,
@@ -68,6 +74,7 @@ let feedEverSynced = false;
 let lastFeedSync: FeedSyncResult | null = null;
 let lastSwap: SwapResult[] = [];
 let lastPoolSync: SyncKeeperResult | null = null;
+let lastPlainArb: PlainArbResult | null = null;
 let accumulatedFees: AccumulatedFees = emptyAccumulatedFees();
 
 function emptyPools() {
@@ -112,6 +119,7 @@ async function statePayload(extra: Record<string, unknown> = {}) {
     feedEverSynced,
     lastSwap,
     lastPoolSync,
+    lastPlainArb,
     accumulatedFees,
     blocks: getBlockState(),
     syncKeeperStatus,
@@ -140,6 +148,7 @@ app.post("/api/init", async (_req, res) => {
     lastFeedSync = null;
     lastSwap = [];
     lastPoolSync = null;
+    lastPlainArb = null;
     accumulatedFees = emptyAccumulatedFees();
     resetBlockState(deployment.forkBlock);
     await syncCurrentBlockFromChain();
@@ -414,6 +423,58 @@ app.post("/api/sync/execute", async (_req, res) => {
 
     const pools = await readPoolsSafe();
     res.json(await statePayload({ syncResult, blockNumber, pools }));
+  } catch (err) {
+    await configureDemoMining(false).catch(() => undefined);
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ ok: false, error: message });
+  }
+});
+
+app.post("/api/plain-arb/preview", async (_req, res) => {
+  if (!deployment) {
+    res.status(503).json({ ok: false, error: "Call POST /api/init first" });
+    return;
+  }
+  if (!liquiditySeeded.plain) {
+    res.status(400).json({ ok: false, error: "Seed plain pool liquidity first" });
+    return;
+  }
+
+  try {
+    const preview = await previewPlainArb(deployment, BigInt(oraclePriceScaled));
+    res.json({ ok: true, preview });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ ok: false, error: message });
+  }
+});
+
+app.post("/api/plain-arb/execute", async (_req, res) => {
+  if (!deployment) {
+    res.status(503).json({ ok: false, error: "Call POST /api/init first" });
+    return;
+  }
+  if (!liquiditySeeded.plain) {
+    res.status(400).json({ ok: false, error: "Seed plain pool liquidity first" });
+    return;
+  }
+
+  try {
+    const pendingTxs: Hex[] = [];
+    let arbResult: PlainArbResult | null = null;
+
+    const blockNumber = await runBlockOperation(async () => {
+      const out = await executePlainArb(deployment!, BigInt(oraclePriceScaled));
+      pendingTxs.push(...out.txHashes);
+      arbResult = out.result;
+    });
+
+    await waitForAllReceipts(pendingTxs);
+    if (arbResult) arbResult = await finalizePlainArbResult(arbResult);
+    lastPlainArb = arbResult;
+
+    const pools = await readPoolsSafe();
+    res.json(await statePayload({ arbResult, blockNumber, pools }));
   } catch (err) {
     await configureDemoMining(false).catch(() => undefined);
     const message = err instanceof Error ? err.message : String(err);

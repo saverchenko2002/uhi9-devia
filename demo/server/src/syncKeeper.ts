@@ -13,6 +13,11 @@ import { foundry } from "viem/chains";
 import { getActorAccount } from "./accounts.js";
 import { ANVIL_RPC } from "./accounts.js";
 import {
+  syncKeeperProfitBreakdown,
+  type ProfitBreakdownUsdt,
+} from "./arbProfitBreakdown.js";
+import type { SyncDirection } from "./arbProfitBreakdown.js";
+import {
   PRICE_DECIMALS,
   USDT,
   WETH,
@@ -167,6 +172,8 @@ const INTENT_EXECUTED_ABI = [
       { name: "actualProfit", type: "uint256", indexed: false },
       { name: "donationAmount", type: "uint256", indexed: false },
       { name: "keeperPayout", type: "uint256", indexed: false },
+      { name: "capitalGainDonation", type: "uint256", indexed: false },
+      { name: "capitalGainKeeperPayout", type: "uint256", indexed: false },
     ],
   },
 ] as const;
@@ -191,10 +198,10 @@ export type SyncDistributionPreview = {
   profitToken: SyncToken;
   expectedProfitRaw: string;
   minDonateBps: number;
+  profitBreakdownUsdt: ProfitBreakdownUsdt;
 };
 
-/** Pool cheaper than oracle → buy WETH in pool (USDT in). Pool richer → sell WETH in pool. */
-export type SyncDirection = "poolBelowOracle" | "poolAboveOracle";
+export type { SyncDirection } from "./arbProfitBreakdown.js";
 
 export type KeeperSwapFeePreview = {
   token: SyncToken;
@@ -222,6 +229,12 @@ export type SyncKeeperResult = {
   keeperPayout: string;
   capitalReturned: string;
   profitToken: SyncToken;
+  direction: SyncDirection;
+  targetPriceScaled: string;
+  capitalAmountRaw: string;
+  outerSettlementRaw: string;
+  minDonateBps: number;
+  profitBreakdownUsdt: ProfitBreakdownUsdt;
 };
 
 function tokenSymbol(addr: string): SyncToken {
@@ -408,17 +421,48 @@ function packExternalSwap(
   return concat([pad(mockRouter, { size: 20 }), calldata]);
 }
 
+function wethGainFromPlan(plan: Pick<SyncPlan, "direction" | "capitalAmount" | "outerSettlementRaw">): bigint {
+  if (plan.direction !== "poolAboveOracle") return 0n;
+  return plan.outerSettlementRaw > plan.capitalAmount
+    ? plan.outerSettlementRaw - plan.capitalAmount
+    : 0n;
+}
+
 function computeDistribution(
-  capitalAmount: bigint,
-  expectedProfit: bigint,
+  plan: Pick<SyncPlan, "direction" | "capitalAmount" | "expectedProfit" | "outerSettlementRaw">,
   minDonateBps: number,
-): { donation: bigint; keeperPayout: bigint; capitalReturned: bigint } {
-  if (expectedProfit <= 0n) {
-    return { donation: 0n, keeperPayout: 0n, capitalReturned: capitalAmount };
+): {
+  donationUsdt: bigint;
+  keeperPayoutUsdt: bigint;
+  donationWeth: bigint;
+  keeperPayoutWeth: bigint;
+  capitalReturned: bigint;
+} {
+  const usdtMargin = plan.expectedProfit;
+  const wethGain = wethGainFromPlan(plan);
+
+  if (usdtMargin <= 0n && wethGain <= 0n) {
+    return {
+      donationUsdt: 0n,
+      keeperPayoutUsdt: 0n,
+      donationWeth: 0n,
+      keeperPayoutWeth: 0n,
+      capitalReturned: plan.capitalAmount,
+    };
   }
-  const donation = (expectedProfit * BigInt(minDonateBps)) / BPS;
-  const keeperPayout = expectedProfit > donation ? expectedProfit - donation : 0n;
-  return { donation, keeperPayout, capitalReturned: capitalAmount };
+
+  const donationUsdt = (usdtMargin * BigInt(minDonateBps)) / BPS;
+  const keeperPayoutUsdt = usdtMargin > donationUsdt ? usdtMargin - donationUsdt : 0n;
+  const donationWeth = (wethGain * BigInt(minDonateBps)) / BPS;
+  const keeperPayoutWeth = wethGain > donationWeth ? wethGain - donationWeth : 0n;
+
+  return {
+    donationUsdt,
+    keeperPayoutUsdt,
+    donationWeth,
+    keeperPayoutWeth,
+    capitalReturned: plan.capitalAmount,
+  };
 }
 
 export async function previewKeeperSync(
@@ -457,14 +501,21 @@ export async function previewKeeperSync(
     targetPriceScaled,
   );
 
-  const { donation, keeperPayout, capitalReturned } = computeDistribution(
-    plan.capitalAmount,
-    plan.expectedProfit,
+  const dist = computeDistribution(plan, cfg.minDonateBps);
+
+  const profitBreakdownUsdt = syncKeeperProfitBreakdown(
+    plan.direction,
+    targetPriceScaled,
+    dist.keeperPayoutUsdt,
+    dist.donationUsdt,
+    dist.keeperPayoutWeth,
+    dist.donationWeth,
     cfg.minDonateBps,
   );
 
   const deviation = Number(preview.poolDeviationBps);
-  let canExecute = deviation > 0 && plan.expectedProfit > 0n;
+  const wethGain = wethGainFromPlan(plan);
+  let canExecute = deviation > 0 && (plan.expectedProfit > 0n || wethGain > 0n);
   let reason: string | undefined;
   if (deviation === 0) {
     canExecute = false;
@@ -486,12 +537,13 @@ export async function previewKeeperSync(
     outerArb: plan.outerArb,
     keeperSwapFee: plan.keeperSwapFee,
     distribution: {
-      capitalReturnedRaw: capitalReturned.toString(),
-      keeperProfitRaw: keeperPayout.toString(),
-      donationRaw: donation.toString(),
+      capitalReturnedRaw: dist.capitalReturned.toString(),
+      keeperProfitRaw: dist.keeperPayoutUsdt.toString(),
+      donationRaw: dist.donationUsdt.toString(),
       profitToken: plan.profitToken,
       expectedProfitRaw: plan.expectedProfit.toString(),
       minDonateBps: cfg.minDonateBps,
+      profitBreakdownUsdt,
     },
     canExecute,
     reason,
@@ -693,6 +745,12 @@ export async function executeKeeperSync(
       keeperPayout: preview.distribution.keeperProfitRaw,
       capitalReturned: preview.distribution.capitalReturnedRaw,
       profitToken: "USDT",
+      direction: plan.direction,
+      targetPriceScaled: targetPriceScaled.toString(),
+      capitalAmountRaw: plan.capitalAmount.toString(),
+      outerSettlementRaw: plan.outerSettlementRaw.toString(),
+      minDonateBps: preview.distribution.minDonateBps,
+      profitBreakdownUsdt: preview.distribution.profitBreakdownUsdt,
     },
   };
 }
@@ -712,11 +770,28 @@ export async function finalizeKeeperSyncResult(result: SyncKeeperResult): Promis
   const match = logs.find((l) => l.eventName === "KeeperIntentExecuted");
   if (!match?.args) return result;
 
+  const keeperPayout = (match.args.keeperPayout ?? 0n) as bigint;
+  const donation = (match.args.donationAmount ?? 0n) as bigint;
+  const capitalGainDonation = (match.args.capitalGainDonation ?? 0n) as bigint;
+  const capitalGainKeeperPayout = (match.args.capitalGainKeeperPayout ?? 0n) as bigint;
+  const capitalReturned = (match.args.capitalReturned ?? 0n) as bigint;
+
+  const profitBreakdownUsdt = syncKeeperProfitBreakdown(
+    result.direction,
+    BigInt(result.targetPriceScaled),
+    keeperPayout,
+    donation,
+    capitalGainKeeperPayout,
+    capitalGainDonation,
+    result.minDonateBps,
+  );
+
   return {
     ...result,
     actualProfit: (match.args.actualProfit ?? 0n).toString(),
-    donationAmount: (match.args.donationAmount ?? 0n).toString(),
-    keeperPayout: (match.args.keeperPayout ?? 0n).toString(),
-    capitalReturned: (match.args.capitalReturned ?? 0n).toString(),
+    donationAmount: donation.toString(),
+    keeperPayout: keeperPayout.toString(),
+    capitalReturned: capitalReturned.toString(),
+    profitBreakdownUsdt,
   };
 }

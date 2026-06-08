@@ -52,6 +52,8 @@ contract KeeperExecutorLogic is IKeeperExecutorLogic {
         _pullCapital(env, keeper, intent, ctx);
         actualProfit = _runArbAndMeasureProfit(env, intent, ctx);
         (donationAmount, keeperPayout) = _splitAndPayout(env, keeper, intent, ctx, actualProfit);
+        (uint256 capitalGainDonation, uint256 capitalGainKeeperPayout) =
+            _splitCapitalGain(env, keeper, intent, ctx);
         capitalReturned = _finalizeSync(env, keeper, intent, ctx);
 
         emit IKeeperExecutor.KeeperIntentExecuted(
@@ -62,7 +64,9 @@ contract KeeperExecutorLogic is IKeeperExecutorLogic {
             intent.expectedProfit,
             actualProfit,
             donationAmount,
-            keeperPayout
+            keeperPayout,
+            capitalGainDonation,
+            capitalGainKeeperPayout
         );
     }
 
@@ -176,6 +180,37 @@ contract KeeperExecutorLogic is IKeeperExecutorLogic {
 
         if (keeperPayout > 0) {
             _payoutKeeper(env, intent.profitToken, keeperPayout, ctx.ext, keeper);
+        }
+    }
+
+    /// @dev When capital and profit are different tokens, arb gain also accrues in capital
+    /// (e.g. WETH surplus on pool-above path). Apply the same donate policy to that gain.
+    function _splitCapitalGain(
+        Env memory env,
+        address keeper,
+        IKeeperExecutor.KeeperIntent calldata intent,
+        SyncExecutionContext memory ctx
+    ) private returns (uint256 capitalDonation, uint256 capitalKeeperPayout) {
+        if (intent.capitalToken == intent.profitToken) return (0, 0);
+
+        uint256 capitalBalance = IERC20(intent.capitalToken).balanceOf(env.executor);
+        if (capitalBalance <= intent.capitalAmount) return (0, 0);
+
+        uint256 capitalGain = capitalBalance - intent.capitalAmount;
+        uint256 minRequiredDonation = _minRequiredDonation(capitalGain, ctx.cfg);
+        capitalDonation = KeeperSyncLib.computeDonationAmount(
+            ctx.ext.traits.donateMode, ctx.ext.traits.donateParam, capitalGain, minRequiredDonation
+        );
+        capitalKeeperPayout = capitalGain > capitalDonation ? capitalGain - capitalDonation : 0;
+
+        if (capitalDonation > 0) {
+            IKeeperExecutorCallbacks(env.executor).executorDonate(
+                ctx.key, intent.capitalToken, capitalDonation
+            );
+        }
+
+        if (capitalKeeperPayout > 0) {
+            _payoutKeeper(env, intent.capitalToken, capitalKeeperPayout, ctx.ext, keeper);
         }
     }
 

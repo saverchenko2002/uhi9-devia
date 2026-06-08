@@ -29,7 +29,9 @@ interface IKeeperExecutor {
         uint256 expectedProfit,
         uint256 actualProfit,
         uint256 donationAmount,
-        uint256 keeperPayout
+        uint256 keeperPayout,
+        uint256 capitalGainDonation,
+        uint256 capitalGainKeeperPayout
     );
 
     /// @param capitalToken токен, который keeper вносит для ноги 1 (обычно = poolSwapTokenIn).

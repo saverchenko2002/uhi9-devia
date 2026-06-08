@@ -50,7 +50,7 @@ const POOL_MANAGER_ABI = [
 
 const LIQUIDITY_OFFSET = 3n;
 
-async function readPoolSwapState(
+export async function readPoolSwapState(
   deployment: Deployment,
   pool: "hooked" | "plain",
 ): Promise<{ sqrtPriceX96: bigint; liquidity: bigint } | null> {

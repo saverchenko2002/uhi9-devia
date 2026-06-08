@@ -30,7 +30,7 @@ struct FeedUpdateData {
 ///   1) Keeper кладёт USDC (capital) на KeeperExecutor
 ///   2) Пул: USDC → ETH (к target)
 ///   3) External: ETH → USDC по рыночной цене
-///   4) Профит в profitToken (USDC): donate в пул + payout keeper/treasury
+///   4) Профит: donate в пул + payout keeper/treasury по каждому profit-токену (profitToken + capital gain)
 ///   5) Остаток capital (USDC) возвращается keeper
 struct SyncData {
     uint256 targetPriceScaled;

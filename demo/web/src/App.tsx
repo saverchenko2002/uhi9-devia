@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   executeKeeperSync,
+  executePlainArb,
   executeSwap,
   fetchActors,
   fetchLiquidityDefaults,
   fetchState,
   initDemo,
   previewKeeperSync,
+  previewPlainArb,
   previewSwapFees,
   priceScaledToUsdtPerEth,
   seedLiquidity,
@@ -17,12 +19,14 @@ import {
   type DemoState,
   type PoolTarget,
   type FeeSplitPreview,
+  type PlainArbPreview,
+  type ProfitBreakdownUsdt,
   type SwapFeePreview,
   type SyncDirection,
   type SyncKeeperPreview,
   type SyncLegPreview,
 } from "./api";
-import { Badge, Button, Card, Field, Input, Metric, PlaceholderAction, Select } from "./components/ui";
+import { Badge, Button, Card, Field, Input, Metric, Select } from "./components/ui";
 import { formatFeeToken, formatFeeUsdt, formatTokenAmount, formatUsdtPrice, formatUsdtTvl, feePipsToPercent, shortenAddress } from "./lib/format";
 import type { PoolSnapshot } from "./api";
 
@@ -55,9 +59,12 @@ export default function App() {
   const [swapAmount, setSwapAmount] = useState("0.1");
   const [swapPreview, setSwapPreview] = useState<SwapFeePreview | null>(null);
   const [syncPreview, setSyncPreview] = useState<SyncKeeperPreview | null>(null);
+  const [plainArbPreview, setPlainArbPreview] = useState<PlainArbPreview | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [plainArbing, setPlainArbing] = useState(false);
   const swapPreviewRequestId = useRef(0);
   const syncPreviewRequestId = useRef(0);
+  const plainArbPreviewRequestId = useRef(0);
 
   const ready = state?.anvilReady === true;
 
@@ -114,6 +121,34 @@ export default function App() {
     state?.pools?.hooked?.priceScaled,
     state?.lastSwap,
     state?.lastPoolSync,
+  ]);
+
+  useEffect(() => {
+    if (!ready || !state?.liquiditySeeded.plain) {
+      setPlainArbPreview(null);
+      return;
+    }
+
+    const requestId = ++plainArbPreviewRequestId.current;
+    const timer = setTimeout(() => {
+      previewPlainArb()
+        .then((preview) => {
+          if (requestId === plainArbPreviewRequestId.current) setPlainArbPreview(preview);
+        })
+        .catch(() => {
+          if (requestId === plainArbPreviewRequestId.current) setPlainArbPreview(null);
+        });
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [
+    ready,
+    state?.liquiditySeeded.plain,
+    state?.oraclePriceScaled,
+    state?.pools?.plain?.priceScaled,
+    state?.lastSwap,
+    state?.lastPoolSync,
+    state?.lastPlainArb,
   ]);
 
   useEffect(() => {
@@ -219,6 +254,20 @@ export default function App() {
     }
   }
 
+  async function handleExecutePlainArb() {
+    if (!state) return;
+    setPlainArbing(true);
+    setError(null);
+    try {
+      const next = await executePlainArb();
+      setState(next);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPlainArbing(false);
+    }
+  }
+
   async function handleExecuteSwap() {
     if (!state) return;
     setSwapping(true);
@@ -251,6 +300,7 @@ export default function App() {
     if (stepIndex === 1) return state.liquiditySeeded.hooked && state.liquiditySeeded.plain;
     if (stepIndex === 2) return (state.lastSwap?.length ?? 0) > 0;
     if (stepIndex === 3) return state.lastPoolSync != null;
+    if (stepIndex === 4) return state.lastPlainArb != null;
     return false;
   }
 
@@ -276,6 +326,60 @@ export default function App() {
 
   function formatKeeperFeePips(feePips: number): string {
     return `${((feePips / 1_000_000) * 100).toFixed(3)}%`;
+  }
+
+  function ProfitBreakdownPanel({
+    breakdown,
+    title,
+    estimate,
+  }: {
+    breakdown: ProfitBreakdownUsdt | undefined;
+    title: string;
+    estimate?: boolean;
+  }) {
+    if (!breakdown) return null;
+    const split = breakdown.split;
+    const donatePct =
+      split && split.minDonateBps > 0
+        ? `${(split.minDonateBps / 100).toFixed(0)}% min donate (each profit token)`
+        : null;
+
+    return (
+      <div className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+        <p className="mb-3 text-xs font-medium uppercase tracking-wide text-emerald-600/90">
+          {title}
+          {estimate ? " · estimate" : ""}
+        </p>
+        <Metric
+          label="Total arb profit (USDT)"
+          value={formatFeeUsdt(breakdown.grossUsdt)}
+          hint="Full two-leg cycle, converted to USDT @ oracle"
+        />
+        {donatePct && (
+          <p className="mt-2 text-xs text-zinc-500">Pool config · {donatePct}</p>
+        )}
+        <div className="mt-3 space-y-2 border-t border-emerald-500/10 pt-3 font-mono text-sm">
+          {breakdown.syncKeeperUsdt > 0 && (
+            <div className="flex justify-between gap-3 text-zinc-200">
+              <span className="text-zinc-500">→ Sync keeper</span>
+              <span>{formatFeeUsdt(breakdown.syncKeeperUsdt)}</span>
+            </div>
+          )}
+          {breakdown.poolDonationUsdt > 0 && (
+            <div className="flex justify-between gap-3 text-zinc-200">
+              <span className="text-zinc-500">→ Pool (donation)</span>
+              <span>{formatFeeUsdt(breakdown.poolDonationUsdt)}</span>
+            </div>
+          )}
+          {breakdown.plainArbUsdt > 0 && (
+            <div className="flex justify-between gap-3 text-zinc-200">
+              <span className="text-zinc-500">→ Plain arbitrageur</span>
+              <span>{formatFeeUsdt(breakdown.plainArbUsdt)}</span>
+            </div>
+          )}
+        </div>
+      </div>
+    );
   }
 
   function syncLegHint(direction: SyncDirection | undefined, leg: "pool" | "outer"): string {
@@ -811,45 +915,11 @@ export default function App() {
                 />
               </div>
 
-              <div className="mt-4 rounded-xl border border-zinc-800/80 bg-zinc-950/50 p-4">
-                <p className="mb-3 text-xs font-medium uppercase tracking-wide text-zinc-500">
-                  Distribution (estimate)
-                </p>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <Metric
-                    label="Capital returned to keeper"
-                    value={formatSyncToken(
-                      syncPreview?.distribution.capitalReturnedRaw,
-                      syncPreview?.capitalToken ?? "USDT",
-                    )}
-                    hint={
-                      syncPreview
-                        ? `${syncPreview.capitalToken} committed in leg 1`
-                        : undefined
-                    }
-                  />
-                  <Metric
-                    label="Keeper profit"
-                    value={formatSyncUsdt(syncPreview?.distribution.keeperProfitRaw)}
-                    hint={
-                      syncPreview
-                        ? `≈ ${(syncPreview.distribution.minDonateBps / 100).toFixed(0)}% of arb profit to keeper · ${formatSyncUsdt(syncPreview.distribution.expectedProfitRaw)} gross`
-                        : undefined
-                    }
-                  />
-                  <div className="sm:col-span-2">
-                    <Metric
-                      label="Donation to pool"
-                      value={formatSyncUsdt(syncPreview?.distribution.donationRaw)}
-                      hint={
-                        syncPreview
-                          ? `Min ${(syncPreview.distribution.minDonateBps / 100).toFixed(0)}% of arb profit — equals keeper share at 50%`
-                          : "Min donate bps of arb profit"
-                      }
-                    />
-                  </div>
-                </div>
-              </div>
+              <ProfitBreakdownPanel
+                breakdown={syncPreview?.distribution.profitBreakdownUsdt}
+                title="Who gets the profit"
+                estimate
+              />
 
               {syncPreview && !syncPreview.canExecute && syncPreview.reason && (
                 <p className="mt-3 text-xs text-amber-400/90">{syncPreview.reason}</p>
@@ -866,31 +936,25 @@ export default function App() {
               </Button>
 
               {ready && state.lastPoolSync && (
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  <Metric
-                    label="Last sync · donation"
-                    value={formatSyncUsdt(state.lastPoolSync.donationAmount)}
-                  />
-                  <Metric
-                    label="Last sync · keeper payout"
-                    value={formatSyncUsdt(state.lastPoolSync.keeperPayout)}
+                <div className="mt-4 space-y-3">
+                  <ProfitBreakdownPanel
+                    breakdown={state.lastPoolSync.profitBreakdownUsdt}
+                    title="Last sync — who got the profit"
                   />
                   {state.syncKeeperStatus?.registered && (
-                    <div className="sm:col-span-2">
-                      <Metric
-                        label="Sync keeper fee window"
-                        value={
-                          state.syncKeeperStatus.isActive
-                            ? `Active · ${state.syncKeeperStatus.blocksUntilExpiry ?? "?"} block(s) left`
-                            : `Expired (sync block ${state.syncKeeperStatus.lastSyncBlock})`
-                        }
-                        hint={
-                          state.syncKeeperStatus.isActive
-                            ? `Hooked swaps in the next ${state.syncKeeperStatus.blocksUntilExpiry ?? 5} block(s) pay 15% of fees to sync keeper`
-                            : "15% sync fee share now goes to LP — swap within 5 blocks after sync to earn it"
-                        }
-                      />
-                    </div>
+                    <Metric
+                      label="Sync keeper fee window"
+                      value={
+                        state.syncKeeperStatus.isActive
+                          ? `Active · ${state.syncKeeperStatus.blocksUntilExpiry ?? "?"} block(s) left`
+                          : `Expired (sync block ${state.syncKeeperStatus.lastSyncBlock})`
+                      }
+                      hint={
+                        state.syncKeeperStatus.isActive
+                          ? `Hooked swaps in the next ${state.syncKeeperStatus.blocksUntilExpiry ?? 5} block(s) pay 15% of fees to sync keeper`
+                          : "15% sync fee share now goes to LP"
+                      }
+                    />
                   )}
                 </div>
               )}
@@ -898,18 +962,80 @@ export default function App() {
 
             <Card
               title="Plain arbitrageur"
-              subtitle="Manual sync on static-fee pool at reference price"
-              badge={<Badge tone="plain">Actor 4</Badge>}
+              subtitle="Swap plain pool to oracle, sell output @ reference — 100% profit to arb, no pool donation"
+              badge={<Badge tone="plain">Step 05</Badge>}
               accent="plain"
             >
-              <PlaceholderAction label="Arbitrage stale plain pool → reference price" />
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                <Metric label="Arb profit" value="—" hint="USDT net of capital" />
+              <div className="rounded-xl border border-zinc-800/80 bg-zinc-950/50 p-4">
+                <p className="mb-3 text-xs font-medium uppercase tracking-wide text-zinc-500">
+                  Leg 1 · plain pool (align price → oracle)
+                </p>
                 <Metric
-                  label="Plain pool price"
-                  value={poolPriceDisplay(state?.pools?.plain)}
+                  label="Amount in → out"
+                  value={formatSyncLeg(plainArbPreview?.poolSwap)}
+                  hint={
+                    plainArbPreview
+                      ? `${syncLegHint(plainArbPreview.direction, "pool")} · deviation ${(plainArbPreview.poolDeviationBps / 100).toFixed(2)}% · target $${formatUsdtPrice(plainArbPreview.targetPriceScaled)}`
+                      : "Seed plain LP, then swap on plain pool (step 03) to skew price away from oracle"
+                  }
+                />
+                {plainArbPreview?.poolSwapFee && (
+                  <div className="mt-3">
+                    <Metric
+                      label="Plain pool fee (leg 1)"
+                      value={formatSyncToken(
+                        plainArbPreview.poolSwapFee.amountRaw,
+                        plainArbPreview.poolSwapFee.token,
+                      )}
+                      hint={`${formatKeeperFeePips(plainArbPreview.poolSwapFee.feePips)} static · 100% LP`}
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-4 rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
+                <p className="mb-3 text-xs font-medium uppercase tracking-wide text-amber-600/80">
+                  Leg 2 · sell @ oracle (mock router)
+                </p>
+                <Metric
+                  label="Amount in → out"
+                  value={formatSyncLeg(plainArbPreview?.outerArb)}
+                  hint={
+                    plainArbPreview
+                      ? `${syncLegHint(plainArbPreview.direction, "outer")} · fair price @ oracle`
+                      : undefined
+                  }
                 />
               </div>
+
+              <ProfitBreakdownPanel
+                breakdown={plainArbPreview?.profitBreakdownUsdt}
+                title="Who gets the profit"
+                estimate
+              />
+
+              {plainArbPreview && !plainArbPreview.canExecute && plainArbPreview.reason && (
+                <p className="mt-3 text-xs text-amber-400/90">{plainArbPreview.reason}</p>
+              )}
+
+              <Button
+                variant="primary"
+                className="mt-4 w-full"
+                onClick={handleExecutePlainArb}
+                disabled={!ready || plainArbing || !plainArbPreview?.canExecute}
+              >
+                {plainArbing && <span className="spinner" />}
+                {plainArbing ? "Executing arb…" : "Execute plain arb (+1 block)"}
+              </Button>
+
+              {ready && state.lastPlainArb && (
+                <div className="mt-4">
+                  <ProfitBreakdownPanel
+                    breakdown={state.lastPlainArb.profitBreakdownUsdt}
+                    title="Last arb — who got the profit"
+                  />
+                </div>
+              )}
             </Card>
           </div>
 

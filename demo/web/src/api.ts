@@ -128,6 +128,23 @@ export type SwapResult = {
   fees: FeeSplitPreview;
 };
 
+export type SyncDirection = "poolBelowOracle" | "poolAboveOracle";
+
+export type ProfitSplitDetail = {
+  direction: SyncDirection;
+  minDonateBps: number;
+  wethGainUsdt: number;
+  usdtMarginUsdt: number;
+};
+
+export type ProfitBreakdownUsdt = {
+  grossUsdt: number;
+  syncKeeperUsdt: number;
+  poolDonationUsdt: number;
+  plainArbUsdt: number;
+  split?: ProfitSplitDetail;
+};
+
 export type SyncLegPreview = {
   amountInRaw: string;
   amountOutRaw: string;
@@ -142,9 +159,8 @@ export type SyncDistributionPreview = {
   profitToken: "WETH" | "USDT";
   expectedProfitRaw: string;
   minDonateBps: number;
+  profitBreakdownUsdt: ProfitBreakdownUsdt;
 };
-
-export type SyncDirection = "poolBelowOracle" | "poolAboveOracle";
 
 export type KeeperSwapFeePreview = {
   token: "WETH" | "USDT";
@@ -172,6 +188,42 @@ export type SyncKeeperResult = {
   keeperPayout: string;
   capitalReturned: string;
   profitToken: "WETH" | "USDT";
+  direction?: SyncDirection;
+  targetPriceScaled?: string;
+  capitalAmountRaw?: string;
+  outerSettlementRaw?: string;
+  minDonateBps?: number;
+  profitBreakdownUsdt?: ProfitBreakdownUsdt;
+};
+
+export type PlainPoolSwapFeePreview = {
+  token: "WETH" | "USDT";
+  amountRaw: string;
+  feePips: number;
+};
+
+export type PlainArbPreview = {
+  poolDeviationBps: number;
+  targetPriceScaled: string;
+  direction: SyncDirection;
+  capitalToken: "WETH" | "USDT";
+  poolSwap: SyncLegPreview;
+  outerArb: SyncLegPreview;
+  poolSwapFee: PlainPoolSwapFeePreview;
+  arbProfitUsdt: number;
+  arbProfitRaw: string;
+  profitBreakdownUsdt: ProfitBreakdownUsdt;
+  canExecute: boolean;
+  reason?: string;
+};
+
+export type PlainArbResult = {
+  txHash: string;
+  poolSwapTxHash: string;
+  outerArbTxHash: string;
+  actualProfit: string;
+  profitToken: "WETH" | "USDT";
+  profitBreakdownUsdt?: ProfitBreakdownUsdt;
 };
 
 export type DemoState = {
@@ -185,6 +237,7 @@ export type DemoState = {
   lastLiquiditySeed: LiquiditySeedResult[];
   lastSwap?: SwapResult[];
   lastPoolSync?: SyncKeeperResult | null;
+  lastPlainArb?: PlainArbResult | null;
   syncKeeperStatus?: SyncKeeperChainStatus | null;
   accumulatedFees?: AccumulatedFees;
   pools?: { hooked: PoolSnapshot; plain: PoolSnapshot };
@@ -280,6 +333,20 @@ export async function executeKeeperSync(): Promise<DemoState> {
   return normalizeState(json);
 }
 
+export async function previewPlainArb(): Promise<PlainArbPreview> {
+  const res = await fetch(`${API}/api/plain-arb/preview`, { method: "POST" });
+  const json = await res.json();
+  if (!json.ok) throw new Error(json.error ?? "plain arb preview failed");
+  return json.preview as PlainArbPreview;
+}
+
+export async function executePlainArb(): Promise<DemoState> {
+  const res = await fetch(`${API}/api/plain-arb/execute`, { method: "POST" });
+  const json = await res.json();
+  if (!json.ok) throw new Error(json.error ?? "plain arb execute failed");
+  return normalizeState(json);
+}
+
 export async function executeSwap(body: {
   actorId?: ActorId;
   pool: PoolTarget;
@@ -319,6 +386,7 @@ function normalizeState(json: Record<string, unknown>): DemoState {
     lastLiquiditySeed: (json.lastLiquiditySeed as LiquiditySeedResult[]) ?? [],
     lastSwap: (json.lastSwap as SwapResult[]) ?? [],
     lastPoolSync: (json.lastPoolSync as SyncKeeperResult | null) ?? null,
+    lastPlainArb: (json.lastPlainArb as PlainArbResult | null) ?? null,
     syncKeeperStatus: (json.syncKeeperStatus as SyncKeeperChainStatus | null) ?? null,
     accumulatedFees: (json.accumulatedFees as AccumulatedFees) ?? {
       plain: { totalFeeUsdt: 0, lpShareUsdt: 0, syncShareUsdt: 0, feedShareUsdt: 0, swapCount: 0 },

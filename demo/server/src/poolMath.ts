@@ -14,6 +14,31 @@ function mulDivRoundingUp(a: bigint, b: bigint, denominator: bigint): bigint {
   return (a * b + denominator - 1n) / denominator;
 }
 
+/** sqrt after exact-in swap (fee taken from input). */
+export function sqrtPriceAfterExactIn(
+  sqrtPriceX96: bigint,
+  liquidity: bigint,
+  amountIn: bigint,
+  zeroForOne: boolean,
+  feePips: number,
+): bigint | null {
+  if (liquidity === 0n || sqrtPriceX96 === 0n || amountIn <= 0n) return null;
+
+  const fee = mulDivRoundingUp(amountIn, BigInt(feePips), 1_000_000n);
+  const amountInLessFee = amountIn - fee;
+  if (amountInLessFee <= 0n) return null;
+
+  if (zeroForOne) {
+    const product = amountInLessFee * sqrtPriceX96;
+    const denominator = liquidity * Q96 + product;
+    if (denominator === 0n) return null;
+    return (liquidity * Q96 * sqrtPriceX96) / denominator;
+  }
+
+  const quotient = mulDivRoundingUp(amountInLessFee, Q96, liquidity);
+  return sqrtPriceX96 + quotient;
+}
+
 /** token1 per token0 at PRICE_DECIMALS (matches PoolPriceLib). */
 export function priceScaledFromSqrtPriceX96(sqrtPriceX96: bigint): bigint {
   if (sqrtPriceX96 === 0n) return 0n;
