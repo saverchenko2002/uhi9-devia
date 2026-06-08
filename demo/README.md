@@ -2,7 +2,7 @@
 
 Single-page **local demo** — not a public dApp with wallet connect. On start it:
 
-1. Launches **Anvil** with mainnet fork at block `25257218`
+1. Launches **Anvil** with mainnet fork at **finalized** (or recent safe block from `RPC_MAINNET`)
 2. Runs **`project/script/demo/DemoEnvironment.s.sol`** (deploy core system + hooked & plain pools)
 3. Serves a **Vite + React** UI that drives actors via a small **Express + viem** API
 

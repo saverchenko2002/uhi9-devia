@@ -65,9 +65,25 @@ export type FeeSplitPreview = {
   syncShareUsdt: number;
   feedShareUsdt: number;
   syncKeeperActive: boolean;
+  syncKeeperRegistered: boolean;
   feedKeeperActive: boolean;
   syncKeeper: string | null;
   feedKeeper: string | null;
+  lastSyncBlock: number | null;
+  syncWindowEndBlock: number | null;
+  syncBlocksUntilExpiry: number | null;
+  syncShareBps: number;
+};
+
+export type SyncKeeperChainStatus = {
+  keeper: string | null;
+  isActive: boolean;
+  registered: boolean;
+  qualityBps: number;
+  lastSyncBlock: number | null;
+  windowEndBlock: number | null;
+  currentBlock: number;
+  blocksUntilExpiry: number | null;
 };
 
 export type SwapAmountOutPreview = {
@@ -112,6 +128,52 @@ export type SwapResult = {
   fees: FeeSplitPreview;
 };
 
+export type SyncLegPreview = {
+  amountInRaw: string;
+  amountOutRaw: string;
+  tokenIn: "WETH" | "USDT";
+  tokenOut: "WETH" | "USDT";
+};
+
+export type SyncDistributionPreview = {
+  capitalReturnedRaw: string;
+  keeperProfitRaw: string;
+  donationRaw: string;
+  profitToken: "WETH" | "USDT";
+  expectedProfitRaw: string;
+  minDonateBps: number;
+};
+
+export type SyncDirection = "poolBelowOracle" | "poolAboveOracle";
+
+export type KeeperSwapFeePreview = {
+  token: "WETH" | "USDT";
+  amountRaw: string;
+  feePips: number;
+};
+
+export type SyncKeeperPreview = {
+  poolDeviationBps: number;
+  targetPriceScaled: string;
+  direction: SyncDirection;
+  capitalToken: "WETH" | "USDT";
+  poolSwap: SyncLegPreview;
+  outerArb: SyncLegPreview;
+  keeperSwapFee: KeeperSwapFeePreview;
+  distribution: SyncDistributionPreview;
+  canExecute: boolean;
+  reason?: string;
+};
+
+export type SyncKeeperResult = {
+  txHash: string;
+  actualProfit: string;
+  donationAmount: string;
+  keeperPayout: string;
+  capitalReturned: string;
+  profitToken: "WETH" | "USDT";
+};
+
 export type DemoState = {
   deployment: Deployment;
   anvilReady?: boolean;
@@ -122,6 +184,8 @@ export type DemoState = {
   liquiditySeeded: { hooked: boolean; plain: boolean };
   lastLiquiditySeed: LiquiditySeedResult[];
   lastSwap?: SwapResult[];
+  lastPoolSync?: SyncKeeperResult | null;
+  syncKeeperStatus?: SyncKeeperChainStatus | null;
   accumulatedFees?: AccumulatedFees;
   pools?: { hooked: PoolSnapshot; plain: PoolSnapshot };
 };
@@ -202,6 +266,20 @@ export async function previewSwapFees(body: {
   return json.preview as SwapFeePreview;
 }
 
+export async function previewKeeperSync(): Promise<SyncKeeperPreview> {
+  const res = await fetch(`${API}/api/sync/preview`, { method: "POST" });
+  const json = await res.json();
+  if (!json.ok) throw new Error(json.error ?? "sync preview failed");
+  return json.preview as SyncKeeperPreview;
+}
+
+export async function executeKeeperSync(): Promise<DemoState> {
+  const res = await fetch(`${API}/api/sync/execute`, { method: "POST" });
+  const json = await res.json();
+  if (!json.ok) throw new Error(json.error ?? "sync execute failed");
+  return normalizeState(json);
+}
+
 export async function executeSwap(body: {
   actorId?: ActorId;
   pool: PoolTarget;
@@ -240,6 +318,8 @@ function normalizeState(json: Record<string, unknown>): DemoState {
     },
     lastLiquiditySeed: (json.lastLiquiditySeed as LiquiditySeedResult[]) ?? [],
     lastSwap: (json.lastSwap as SwapResult[]) ?? [],
+    lastPoolSync: (json.lastPoolSync as SyncKeeperResult | null) ?? null,
+    syncKeeperStatus: (json.syncKeeperStatus as SyncKeeperChainStatus | null) ?? null,
     accumulatedFees: (json.accumulatedFees as AccumulatedFees) ?? {
       plain: { totalFeeUsdt: 0, lpShareUsdt: 0, syncShareUsdt: 0, feedShareUsdt: 0, swapCount: 0 },
       hooked: { totalFeeUsdt: 0, lpShareUsdt: 0, syncShareUsdt: 0, feedShareUsdt: 0, swapCount: 0 },

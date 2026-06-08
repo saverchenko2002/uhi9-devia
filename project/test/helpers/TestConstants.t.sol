@@ -30,7 +30,7 @@ library TestConstants {
     //todo: when everything is ready hardcode
     bytes32 internal constant DYNAMIC_FEE_HOOK_SALT = bytes32(0);
 
-    uint256 internal constant TEST_BLOCK_FIXED = 25257218;
+    uint256 internal constant TEST_BLOCK_FIXED = 25272364;
 
     /// @dev WETH budget for LP seeding in sync integration tests.
     uint256 internal constant SYNC_TEST_LP_WETH = 100 ether;

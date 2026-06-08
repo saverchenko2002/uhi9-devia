@@ -1,6 +1,6 @@
 import { createPublicClient, http } from "viem";
 import { foundry } from "viem/chains";
-import { ANVIL_RPC, FORK_BLOCK } from "./accounts.js";
+import { ANVIL_RPC } from "./accounts.js";
 
 export type BlockState = {
   forkBlock: number;
@@ -10,13 +10,13 @@ export type BlockState = {
 };
 
 let blockState: BlockState = {
-  forkBlock: FORK_BLOCK,
-  currentBlock: FORK_BLOCK,
+  forkBlock: 0,
+  currentBlock: 0,
   feedSyncBlock: null,
   poolSyncBlock: null,
 };
 
-export function resetBlockState(forkBlock: number = FORK_BLOCK): BlockState {
+export function resetBlockState(forkBlock: number = 0): BlockState {
   blockState = {
     forkBlock,
     currentBlock: forkBlock,

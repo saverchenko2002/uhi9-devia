@@ -8,6 +8,7 @@ import { priceScaledFromSqrtPriceX96 } from "./poolMath.js";
 import { poolStateSlot } from "./poolKeys.js";
 import type { PoolTarget } from "./liquidity.js";
 import { quoteSwapExactIn, estimateSwapAmountOut } from "./quoteSwap.js";
+import { readSyncKeeperStatus } from "./syncKeeperStatus.js";
 
 const BPS = 10_000n;
 const PIPS = 1_000_000n;
@@ -67,21 +68,6 @@ const HOOK_ABI = [
   },
 ] as const;
 
-const SYNC_KEEPERS_ABI = [
-  {
-    type: "function",
-    name: "getActiveSyncKeeper",
-    inputs: [{ name: "poolId", type: "bytes32" }],
-    outputs: [
-      { name: "keeper", type: "address" },
-      { name: "qualityBps", type: "uint32" },
-      { name: "windowEndBlock", type: "uint32" },
-      { name: "isActive", type: "bool" },
-    ],
-    stateMutability: "view",
-  },
-] as const;
-
 const MOCK_PYTH_ABI = [
   {
     type: "function",
@@ -116,9 +102,14 @@ export type FeeSplitPreview = {
   syncShareUsdt: number;
   feedShareUsdt: number;
   syncKeeperActive: boolean;
+  syncKeeperRegistered: boolean;
   feedKeeperActive: boolean;
   syncKeeper: string | null;
   feedKeeper: string | null;
+  lastSyncBlock: number | null;
+  syncWindowEndBlock: number | null;
+  syncBlocksUntilExpiry: number | null;
+  syncShareBps: number;
 };
 
 export type SwapAmountOutPreview = {
@@ -257,9 +248,14 @@ async function previewPlain(
     syncShareUsdt: 0,
     feedShareUsdt: 0,
     syncKeeperActive: false,
+    syncKeeperRegistered: false,
     feedKeeperActive: false,
     syncKeeper: null,
     feedKeeper: null,
+    lastSyncBlock: null,
+    syncWindowEndBlock: null,
+    syncBlocksUntilExpiry: null,
+    syncShareBps: 0,
   };
 }
 
@@ -273,7 +269,6 @@ async function previewHooked(
   const poolId = deployment.addresses.hookedPoolId as Hex;
   const hook = deployment.addresses.dynamicFeeHook as Address;
   const registry = deployment.addresses.registry as Address;
-  const syncKeepers = deployment.addresses.syncKeepers as Address;
   const mockPyth = deployment.addresses.mockPyth as Address;
 
   const cfg = await client.readContract({
@@ -313,18 +308,16 @@ async function previewHooked(
     args: [poolId],
   });
 
-  const sync = await client.readContract({
-    address: syncKeepers,
-    abi: SYNC_KEEPERS_ABI,
-    functionName: "getActiveSyncKeeper",
-    args: [poolId],
-  });
+  // Swap preview → tx lands in the next mined block (+1 vs current head).
+  const syncStatus = await readSyncKeeperStatus(deployment, { blockOffset: 1 });
 
-  const syncKeeper = sync.isActive ? sync.keeper : ("0x0000000000000000000000000000000000000000" as Address);
+  const syncKeeperAddr = syncStatus.isActive
+    ? (syncStatus.keeper as Address)
+    : ("0x0000000000000000000000000000000000000000" as Address);
   const split = splitSwapFee(
     totalFee,
     feedKeeper,
-    syncKeeper,
+    syncKeeperAddr,
     cfg.lpShareBps,
     cfg.syncShareBps,
     cfg.feedShareBps,
@@ -344,10 +337,15 @@ async function previewHooked(
     lpShareUsdt: tokenAmountToUsdt(split.lp, feeToken, valPrice),
     syncShareUsdt: tokenAmountToUsdt(split.sync, feeToken, valPrice),
     feedShareUsdt: tokenAmountToUsdt(split.feed, feeToken, valPrice),
-    syncKeeperActive: sync.isActive,
+    syncKeeperActive: syncStatus.isActive,
+    syncKeeperRegistered: syncStatus.registered,
     feedKeeperActive: feedKeeper !== "0x0000000000000000000000000000000000000000",
-    syncKeeper: sync.isActive ? sync.keeper : null,
+    syncKeeper: syncStatus.keeper,
     feedKeeper: feedKeeper !== "0x0000000000000000000000000000000000000000" ? feedKeeper : null,
+    lastSyncBlock: syncStatus.lastSyncBlock,
+    syncWindowEndBlock: syncStatus.windowEndBlock,
+    syncBlocksUntilExpiry: syncStatus.blocksUntilExpiry,
+    syncShareBps: cfg.syncShareBps,
   };
 }
 

@@ -11,6 +11,7 @@ export const HOOKED_DEMO_BASE_FEE = 10_066;
 export const HOOKED_DEMO_MIN_FEE = 5_033;
 export const HOOKED_DEMO_MAX_FEE = 30_198;
 export const TICK_SPACING = 60;
+export const PRICE_DECIMALS = 8;
 
 const MIN_TICK = -887272;
 const MAX_TICK = 887272;
@@ -26,5 +27,16 @@ export function fullRangeTickUpper(): number {
 /** token1 (USDT) for `wethHuman` WETH at `priceScaled` (8 decimals). */
 export function usdtForWeth(wethHuman: number, priceScaled: bigint): bigint {
   const wethWei = BigInt(Math.round(wethHuman * 1e18));
-  return (wethWei * priceScaled * 1_000_000n) / (100_000_000n * 1_000_000_000_000_000_000n);
+  return usdtRawForWethWei(wethWei, priceScaled);
+}
+
+/** USDT raw (6 dec) for `wethWei` at `priceScaled` (8 dec per ETH). */
+export function usdtRawForWethWei(wethWei: bigint, priceScaled: bigint): bigint {
+  return (wethWei * priceScaled) / 10n ** 20n;
+}
+
+/** WETH wei for `usdtRaw` at `priceScaled` (inverse of usdtRawForWethWei). */
+export function wethRawForUsdtRaw(usdtRaw: bigint, priceScaled: bigint): bigint {
+  if (priceScaled === 0n) return 0n;
+  return (usdtRaw * 10n ** 20n) / priceScaled;
 }

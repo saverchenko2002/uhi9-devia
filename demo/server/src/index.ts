@@ -9,6 +9,7 @@ import {
   configureDemoMining,
   getBlockState,
   markFeedSync,
+  markPoolSync,
   resetBlockState,
   runBlockOperation,
   syncCurrentBlockFromChain,
@@ -30,20 +31,31 @@ import {
   parseSwapAmountIn,
   type SwapResult,
 } from "./swap.js";
+import {
+  executeKeeperSync,
+  finalizeKeeperSyncResult,
+  previewKeeperSync,
+  type SyncKeeperResult,
+} from "./syncKeeper.js";
+import { readSyncKeeperStatus } from "./syncKeeperStatus.js";
 import { waitForAllReceipts } from "./tx.js";
 
 const PORT = 8787;
 
-function readRpcMainnet(): string {
+function readEnvVar(name: string): string | undefined {
   try {
     const env = readFileSync(resolve(PROJECT_ROOT, ".env"), "utf8");
-    const match = env.match(/^RPC_MAINNET=(.+)$/m);
+    const match = env.match(new RegExp(`^${name}=(.+)$`, "m"));
     if (match?.[1]) return match[1].trim().replace(/^["']|["']$/g, "");
   } catch {
     /* optional .env */
   }
-  const fromProcess = process.env.RPC_MAINNET;
-  if (fromProcess) return fromProcess;
+  return process.env[name];
+}
+
+function readRpcMainnet(): string {
+  const rpc = readEnvVar("RPC_MAINNET");
+  if (rpc) return rpc;
   throw new Error("RPC_MAINNET not set (project/.env or env var)");
 }
 
@@ -55,6 +67,7 @@ let lastLiquiditySeed: SeedLiquidityResult[] = [];
 let feedEverSynced = false;
 let lastFeedSync: FeedSyncResult | null = null;
 let lastSwap: SwapResult[] = [];
+let lastPoolSync: SyncKeeperResult | null = null;
 let accumulatedFees: AccumulatedFees = emptyAccumulatedFees();
 
 function emptyPools() {
@@ -78,7 +91,16 @@ function serializeFeedSync(feed: FeedSyncResult | null) {
   };
 }
 
-function statePayload(extra: Record<string, unknown> = {}) {
+async function statePayload(extra: Record<string, unknown> = {}) {
+  let syncKeeperStatus = null;
+  if (deployment && anvilReady && (await isAnvilReachable())) {
+    try {
+      syncKeeperStatus = await readSyncKeeperStatus(deployment);
+    } catch {
+      /* chain read optional */
+    }
+  }
+
   return {
     ok: true,
     anvilReady,
@@ -89,8 +111,10 @@ function statePayload(extra: Record<string, unknown> = {}) {
     lastFeedSync: serializeFeedSync(lastFeedSync),
     feedEverSynced,
     lastSwap,
+    lastPoolSync,
     accumulatedFees,
     blocks: getBlockState(),
+    syncKeeperStatus,
     ...extra,
   };
 }
@@ -115,12 +139,13 @@ app.post("/api/init", async (_req, res) => {
     feedEverSynced = false;
     lastFeedSync = null;
     lastSwap = [];
+    lastPoolSync = null;
     accumulatedFees = emptyAccumulatedFees();
     resetBlockState(deployment.forkBlock);
     await syncCurrentBlockFromChain();
     await configureDemoMining();
     const pools = await readPoolSnapshots(deployment);
-    res.json(statePayload({ pools }));
+    res.json(await statePayload({ pools }));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ ok: false, error: message });
@@ -137,7 +162,7 @@ app.get("/api/state", async (_req, res) => {
       await syncCurrentBlockFromChain();
     }
     const pools = await readPoolsSafe();
-    res.json(statePayload({ pools }));
+    res.json(await statePayload({ pools }));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ ok: false, error: message });
@@ -227,7 +252,7 @@ app.post("/api/liquidity/seed", async (req, res) => {
     console.log("[seed] POST /api/liquidity/seed OK", { blockNumber, txCount: pendingTxs.length });
     const pools = await readPoolsSafe();
     res.json(
-      statePayload({
+      await statePayload({
         results: lastLiquiditySeed,
         pools,
       }),
@@ -335,7 +360,60 @@ app.post("/api/swap/execute", async (req, res) => {
     accumulatedFees = accumulateSwapFees(accumulatedFees, swapResults);
 
     const pools = await readPoolsSafe();
-    res.json(statePayload({ swapResults, blockNumber, pools }));
+    res.json(await statePayload({ swapResults, blockNumber, pools }));
+  } catch (err) {
+    await configureDemoMining(false).catch(() => undefined);
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ ok: false, error: message });
+  }
+});
+
+app.post("/api/sync/preview", async (_req, res) => {
+  if (!deployment) {
+    res.status(503).json({ ok: false, error: "Call POST /api/init first" });
+    return;
+  }
+  if (!liquiditySeeded.hooked) {
+    res.status(400).json({ ok: false, error: "Seed hooked pool liquidity first" });
+    return;
+  }
+
+  try {
+    const preview = await previewKeeperSync(deployment, BigInt(oraclePriceScaled));
+    res.json({ ok: true, preview });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ ok: false, error: message });
+  }
+});
+
+app.post("/api/sync/execute", async (_req, res) => {
+  if (!deployment) {
+    res.status(503).json({ ok: false, error: "Call POST /api/init first" });
+    return;
+  }
+  if (!liquiditySeeded.hooked) {
+    res.status(400).json({ ok: false, error: "Seed hooked pool liquidity first" });
+    return;
+  }
+
+  try {
+    const pendingTxs: Hex[] = [];
+    let syncResult: SyncKeeperResult | null = null;
+
+    const blockNumber = await runBlockOperation(async () => {
+      const out = await executeKeeperSync(deployment!, BigInt(oraclePriceScaled));
+      pendingTxs.push(...out.txHashes);
+      syncResult = out.result;
+    });
+
+    await waitForAllReceipts(pendingTxs);
+    if (syncResult) syncResult = await finalizeKeeperSyncResult(syncResult);
+    lastPoolSync = syncResult;
+    markPoolSync(blockNumber);
+
+    const pools = await readPoolsSafe();
+    res.json(await statePayload({ syncResult, blockNumber, pools }));
   } catch (err) {
     await configureDemoMining(false).catch(() => undefined);
     const message = err instanceof Error ? err.message : String(err);
@@ -368,7 +446,7 @@ app.post("/api/oracle/price", async (req, res) => {
     oraclePriceScaled = priceScaled;
 
     const pools = await readPoolsSafe();
-    res.json(statePayload({ pools }));
+    res.json(await statePayload({ pools }));
   } catch (err) {
     await configureDemoMining(false).catch(() => undefined);
     const message = err instanceof Error ? err.message : String(err);

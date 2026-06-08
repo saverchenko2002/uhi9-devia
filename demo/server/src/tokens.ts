@@ -32,6 +32,29 @@ const WETH_DEPOSIT_ABI = [
   },
 ] as const;
 
+const ERC20_APPROVE_ABI = [
+  {
+    type: "function",
+    name: "approve",
+    inputs: [
+      { name: "spender", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ type: "bool" }],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "allowance",
+    inputs: [
+      { name: "owner", type: "address" },
+      { name: "spender", type: "address" },
+    ],
+    outputs: [{ type: "uint256" }],
+    stateMutability: "view",
+  },
+] as const;
+
 const ERC20_TRANSFER_ABI = [
   {
     type: "function",
@@ -117,14 +140,79 @@ export async function fundWethDirect(recipient: Address, amount: bigint): Promis
   await writeErc20StorageBalance(WETH, recipient, WETH_BALANCES_SLOT, current + amount);
 }
 
-/** Set ERC20 allowance via storage — no on-chain tx. */
+/**
+ * On-chain approve (required for USDT — proxy allowance slot ≠ our storage hack).
+ * Returns tx hashes to include in the same mined block as executeWithIntent.
+ */
+export async function ensureErc20Allowance(
+  walletClient: WalletClient,
+  token: Address,
+  spender: Address,
+  amount: bigint,
+): Promise<Hex[]> {
+  const account = walletClient.account;
+  if (!account) throw new Error("ensureErc20Allowance: walletClient has no account");
+
+  const publicClient = createAnvilPublicClient();
+  const current = await publicClient.readContract({
+    address: token,
+    abi: ERC20_APPROVE_ABI,
+    functionName: "allowance",
+    args: [account.address, spender],
+  });
+
+  if (current >= amount) {
+    console.log("[seed] allowance OK", {
+      token,
+      owner: account.address,
+      spender,
+      allowance: current.toString(),
+    });
+    return [];
+  }
+
+  const hashes: Hex[] = [];
+
+  // Mainnet USDT: must reset to 0 before changing a non-zero allowance.
+  if (token.toLowerCase() === USDT.toLowerCase() && current > 0n) {
+    const zeroHash = await sendContractTx(walletClient, {
+      address: token,
+      abi: ERC20_APPROVE_ABI,
+      functionName: "approve",
+      args: [spender, 0n],
+    });
+    hashes.push(zeroHash);
+    console.log("[seed] usdt approve(0)", { txHash: zeroHash });
+  }
+
+  const approveHash = await sendContractTx(walletClient, {
+    address: token,
+    abi: ERC20_APPROVE_ABI,
+    functionName: "approve",
+    args: [spender, amount],
+  });
+  hashes.push(approveHash);
+  console.log("[seed] approve", {
+    token,
+    spender,
+    amount: amount.toString(),
+    txHash: approveHash,
+  });
+
+  return hashes;
+}
+
+/** Set ERC20 allowance via storage — WETH only; USDT proxy slot is unreliable. */
 export async function setAllowanceDirect(
   token: Address,
   owner: Address,
   spender: Address,
   amount: bigint,
 ): Promise<void> {
-  const mappingSlot = token.toLowerCase() === USDT.toLowerCase() ? USDT_ALLOWANCE_SLOT : WETH_ALLOWANCE_SLOT;
+  if (token.toLowerCase() === USDT.toLowerCase()) {
+    throw new Error("setAllowanceDirect: use ensureErc20Allowance for USDT");
+  }
+  const mappingSlot = WETH_ALLOWANCE_SLOT;
   const testClient = createAnvilTestClient();
   await testClient.setStorageAt({
     address: token,

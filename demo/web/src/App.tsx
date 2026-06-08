@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  executeKeeperSync,
   executeSwap,
   fetchActors,
   fetchLiquidityDefaults,
   fetchState,
   initDemo,
+  previewKeeperSync,
   previewSwapFees,
   priceScaledToUsdtPerEth,
   seedLiquidity,
@@ -16,6 +18,9 @@ import {
   type PoolTarget,
   type FeeSplitPreview,
   type SwapFeePreview,
+  type SyncDirection,
+  type SyncKeeperPreview,
+  type SyncLegPreview,
 } from "./api";
 import { Badge, Button, Card, Field, Input, Metric, PlaceholderAction, Select } from "./components/ui";
 import { formatFeeToken, formatFeeUsdt, formatTokenAmount, formatUsdtPrice, formatUsdtTvl, feePipsToPercent, shortenAddress } from "./lib/format";
@@ -49,7 +54,10 @@ export default function App() {
   const [swapZeroForOne, setSwapZeroForOne] = useState(true);
   const [swapAmount, setSwapAmount] = useState("0.1");
   const [swapPreview, setSwapPreview] = useState<SwapFeePreview | null>(null);
+  const [syncPreview, setSyncPreview] = useState<SyncKeeperPreview | null>(null);
+  const [syncing, setSyncing] = useState(false);
   const swapPreviewRequestId = useRef(0);
+  const syncPreviewRequestId = useRef(0);
 
   const ready = state?.anvilReady === true;
 
@@ -82,6 +90,33 @@ export default function App() {
   }, [swapZeroForOne, swapPoolTarget]);
 
   useEffect(() => {
+    if (!ready || !state?.liquiditySeeded.hooked) {
+      setSyncPreview(null);
+      return;
+    }
+
+    const requestId = ++syncPreviewRequestId.current;
+    const timer = setTimeout(() => {
+      previewKeeperSync()
+        .then((preview) => {
+          if (requestId === syncPreviewRequestId.current) setSyncPreview(preview);
+        })
+        .catch(() => {
+          if (requestId === syncPreviewRequestId.current) setSyncPreview(null);
+        });
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [
+    ready,
+    state?.liquiditySeeded.hooked,
+    state?.oraclePriceScaled,
+    state?.pools?.hooked?.priceScaled,
+    state?.lastSwap,
+    state?.lastPoolSync,
+  ]);
+
+  useEffect(() => {
     if (!ready || !state) {
       setSwapPreview(null);
       return;
@@ -110,7 +145,18 @@ export default function App() {
     }, 350);
 
     return () => clearTimeout(timer);
-  }, [ready, state, swapPoolTarget, swapZeroForOne, swapAmount]);
+  }, [
+    ready,
+    state,
+    swapPoolTarget,
+    swapZeroForOne,
+    swapAmount,
+    state?.blocks?.poolSyncBlock,
+    state?.blocks?.currentBlock,
+    state?.lastPoolSync,
+    state?.syncKeeperStatus?.isActive,
+    state?.syncKeeperStatus?.blocksUntilExpiry,
+  ]);
 
   async function handleInit() {
     setLoading(true);
@@ -159,6 +205,20 @@ export default function App() {
     }
   }
 
+  async function handleExecuteKeeperSync() {
+    if (!state) return;
+    setSyncing(true);
+    setError(null);
+    try {
+      const next = await executeKeeperSync();
+      setState(next);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   async function handleExecuteSwap() {
     if (!state) return;
     setSwapping(true);
@@ -190,7 +250,44 @@ export default function App() {
     if (stepIndex === 0) return true;
     if (stepIndex === 1) return state.liquiditySeeded.hooked && state.liquiditySeeded.plain;
     if (stepIndex === 2) return (state.lastSwap?.length ?? 0) > 0;
+    if (stepIndex === 3) return state.lastPoolSync != null;
     return false;
+  }
+
+  function rawToHuman(raw: string, token: "WETH" | "USDT"): number {
+    return token === "WETH" ? Number(raw) / 1e18 : Number(raw) / 1e6;
+  }
+
+  function formatSyncLeg(leg: SyncLegPreview | undefined): string {
+    if (!leg) return "—";
+    const amountIn = formatTokenAmount(rawToHuman(leg.amountInRaw, leg.tokenIn));
+    const amountOut = formatTokenAmount(rawToHuman(leg.amountOutRaw, leg.tokenOut));
+    return `${amountIn} ${leg.tokenIn} → ${amountOut} ${leg.tokenOut}`;
+  }
+
+  function formatSyncToken(raw: string | undefined, token: "WETH" | "USDT"): string {
+    if (!raw) return "—";
+    return formatFeeToken(raw, token);
+  }
+
+  function formatSyncUsdt(raw: string | undefined): string {
+    return formatSyncToken(raw, "USDT");
+  }
+
+  function formatKeeperFeePips(feePips: number): string {
+    return `${((feePips / 1_000_000) * 100).toFixed(3)}%`;
+  }
+
+  function syncLegHint(direction: SyncDirection | undefined, leg: "pool" | "outer"): string {
+    if (!direction) return "";
+    if (leg === "pool") {
+      return direction === "poolBelowOracle"
+        ? "Pool cheaper than oracle — buy WETH in pool (on-chain leg 1)"
+        : "Pool richer than oracle — sell WETH in pool (on-chain leg 1)";
+    }
+    return direction === "poolBelowOracle"
+      ? "Sell WETH @ oracle price (on-chain leg 2)"
+      : "Buy WETH @ oracle with pool USDT (on-chain leg 2)";
   }
 
   function previewMatchesInput(preview: SwapFeePreview | null): preview is SwapFeePreview {
@@ -225,7 +322,39 @@ export default function App() {
   ): string {
     if (!previewMatchesInput(preview) || !fee) return "—";
     const token = fee.feeToken;
-    return `${formatFeeToken(fee.lpShareRaw, token)} LP · ${formatFeeToken(fee.syncShareRaw, token)} sync · ${formatFeeToken(fee.feedShareRaw, token)} feed`;
+    const syncPart = fee.syncKeeperActive
+      ? `${formatFeeToken(fee.syncShareRaw, token)} sync`
+      : "0 sync";
+    return `${formatFeeToken(fee.lpShareRaw, token)} LP · ${syncPart} · ${formatFeeToken(fee.feedShareRaw, token)} feed`;
+  }
+
+  function formatSyncWindowHint(
+    fee: FeeSplitPreview | undefined,
+    _currentBlock: number | undefined,
+  ): string {
+    if (!fee) return "";
+    const feed = fee.feedKeeperActive ? "feed active" : "feed → LP";
+    const pct = `${fee.syncShareBps / 100}%`;
+
+    if (fee.syncKeeperActive) {
+      const left = fee.syncBlocksUntilExpiry;
+      const end = fee.syncWindowEndBlock;
+      const leftNote =
+        left === 0
+          ? " (last block in window)"
+          : left != null && left > 0
+            ? ` (${left} block${left === 1 ? "" : "s"} left after this swap)`
+            : "";
+      return `sync keeper earns ${pct} · window through block ${end}${leftNote} · ${feed}`;
+    }
+
+    if (fee.syncKeeperRegistered) {
+      const last = fee.lastSyncBlock;
+      const end = fee.syncWindowEndBlock;
+      return `sync window expired for this swap (sync block ${last ?? "?"}, ended ${end ?? "?"}) · ${pct} → LP · ${feed}`;
+    }
+
+    return `no keeper sync yet · ${pct} sync share → LP · ${feed}`;
   }
 
   const accumulated = state?.accumulatedFees ?? {
@@ -593,7 +722,10 @@ export default function App() {
                           value={formatHookedDecomposition(swapPreview, swapPreview?.hooked)}
                           hint={
                             previewMatchesInput(swapPreview) && swapPreview.hooked
-                              ? `sync ${swapPreview.hooked.syncKeeperActive ? "active" : "→ LP"} · feed ${swapPreview.hooked.feedKeeperActive ? "active" : "→ LP"}`
+                              ? formatSyncWindowHint(
+                                  swapPreview.hooked,
+                                  state?.blocks?.currentBlock,
+                                )
                               : undefined
                           }
                         />
@@ -633,16 +765,135 @@ export default function App() {
 
             <Card
               title="Sync keeper"
-              subtitle="executeWithIntent — pool donation + keeper payout"
-              badge={<Badge tone="keeper">Actor 3</Badge>}
+              subtitle="executeWithIntent — sync hooked pool to oracle"
+              badge={<Badge tone="keeper">Step 04</Badge>}
               accent="keeper"
             >
-              <PlaceholderAction label="Perform upkeep when pool price lags oracle" />
-              <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                <Metric label="Pool price after" value="—" />
-                <Metric label="Donation" value="—" />
-                <Metric label="Keeper payout" value="—" />
+              <div className="rounded-xl border border-zinc-800/80 bg-zinc-950/50 p-4">
+                <p className="mb-3 text-xs font-medium uppercase tracking-wide text-zinc-500">
+                  Leg 1 · pool swap (hooked pool → target)
+                </p>
+                <Metric
+                  label="Amount in → out"
+                  value={formatSyncLeg(syncPreview?.poolSwap)}
+                  hint={
+                    syncPreview
+                      ? `${syncLegHint(syncPreview.direction, "pool")} · deviation ${(syncPreview.poolDeviationBps / 100).toFixed(2)}% · target $${formatUsdtPrice(syncPreview.targetPriceScaled)}`
+                      : "Seed hooked LP and set oracle away from pool price"
+                  }
+                />
+                {syncPreview?.keeperSwapFee && (
+                  <div className="mt-3">
+                    <Metric
+                      label="Keeper sync fee (min fee on leg 1 input)"
+                      value={formatSyncToken(
+                        syncPreview.keeperSwapFee.amountRaw,
+                        syncPreview.keeperSwapFee.token,
+                      )}
+                      hint={`${formatKeeperFeePips(syncPreview.keeperSwapFee.feePips)} of ${syncPreview.keeperSwapFee.token} in`}
+                    />
+                  </div>
+                )}
               </div>
+
+              <div className="mt-4 rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
+                <p className="mb-3 text-xs font-medium uppercase tracking-wide text-amber-600/80">
+                  Leg 2 · outer arb (@ oracle)
+                </p>
+                <Metric
+                  label="Amount in → out"
+                  value={formatSyncLeg(syncPreview?.outerArb)}
+                  hint={
+                    syncPreview
+                      ? `${syncLegHint(syncPreview.direction, "outer")} · uses leg 1 output (after fee)`
+                      : undefined
+                  }
+                />
+              </div>
+
+              <div className="mt-4 rounded-xl border border-zinc-800/80 bg-zinc-950/50 p-4">
+                <p className="mb-3 text-xs font-medium uppercase tracking-wide text-zinc-500">
+                  Distribution (estimate)
+                </p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Metric
+                    label="Capital returned to keeper"
+                    value={formatSyncToken(
+                      syncPreview?.distribution.capitalReturnedRaw,
+                      syncPreview?.capitalToken ?? "USDT",
+                    )}
+                    hint={
+                      syncPreview
+                        ? `${syncPreview.capitalToken} committed in leg 1`
+                        : undefined
+                    }
+                  />
+                  <Metric
+                    label="Keeper profit"
+                    value={formatSyncUsdt(syncPreview?.distribution.keeperProfitRaw)}
+                    hint={
+                      syncPreview
+                        ? `≈ ${(syncPreview.distribution.minDonateBps / 100).toFixed(0)}% of arb profit to keeper · ${formatSyncUsdt(syncPreview.distribution.expectedProfitRaw)} gross`
+                        : undefined
+                    }
+                  />
+                  <div className="sm:col-span-2">
+                    <Metric
+                      label="Donation to pool"
+                      value={formatSyncUsdt(syncPreview?.distribution.donationRaw)}
+                      hint={
+                        syncPreview
+                          ? `Min ${(syncPreview.distribution.minDonateBps / 100).toFixed(0)}% of arb profit — equals keeper share at 50%`
+                          : "Min donate bps of arb profit"
+                      }
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {syncPreview && !syncPreview.canExecute && syncPreview.reason && (
+                <p className="mt-3 text-xs text-amber-400/90">{syncPreview.reason}</p>
+              )}
+
+              <Button
+                variant="primary"
+                className="mt-4 w-full"
+                onClick={handleExecuteKeeperSync}
+                disabled={!ready || syncing || !syncPreview?.canExecute}
+              >
+                {syncing && <span className="spinner" />}
+                {syncing ? "Executing sync…" : "Execute keeper sync (+1 block)"}
+              </Button>
+
+              {ready && state.lastPoolSync && (
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <Metric
+                    label="Last sync · donation"
+                    value={formatSyncUsdt(state.lastPoolSync.donationAmount)}
+                  />
+                  <Metric
+                    label="Last sync · keeper payout"
+                    value={formatSyncUsdt(state.lastPoolSync.keeperPayout)}
+                  />
+                  {state.syncKeeperStatus?.registered && (
+                    <div className="sm:col-span-2">
+                      <Metric
+                        label="Sync keeper fee window"
+                        value={
+                          state.syncKeeperStatus.isActive
+                            ? `Active · ${state.syncKeeperStatus.blocksUntilExpiry ?? "?"} block(s) left`
+                            : `Expired (sync block ${state.syncKeeperStatus.lastSyncBlock})`
+                        }
+                        hint={
+                          state.syncKeeperStatus.isActive
+                            ? `Hooked swaps in the next ${state.syncKeeperStatus.blocksUntilExpiry ?? 5} block(s) pay 15% of fees to sync keeper`
+                            : "15% sync fee share now goes to LP — swap within 5 blocks after sync to earn it"
+                        }
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
             </Card>
 
             <Card

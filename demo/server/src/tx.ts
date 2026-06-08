@@ -10,6 +10,7 @@ import {
 } from "viem";
 import { foundry } from "viem/chains";
 import { ANVIL_RPC } from "./accounts.js";
+import { explainRevertedTx } from "./revertDecode.js";
 import { stopUsdtWhaleImpersonation } from "./tokens.js";
 
 const ANVIL_GAS = 15_000_000n;
@@ -43,21 +44,36 @@ export async function sendContractTx(
   });
 }
 
+const RECEIPT_TIMEOUT_MS = 45_000;
+
 export async function waitForAllReceipts(hashes: Hex[]): Promise<void> {
   if (hashes.length === 0) return;
   const client = createPublicClient({ chain: foundry, transport: http(ANVIL_RPC) });
-  const failures: string[] = [];
+  const failureDetails: string[] = [];
 
   for (const hash of hashes) {
-    const receipt = await client.waitForTransactionReceipt({ hash });
+    let receipt;
+    try {
+      receipt = await client.waitForTransactionReceipt({
+        hash,
+        timeout: RECEIPT_TIMEOUT_MS,
+        pollingInterval: 500,
+      });
+    } catch {
+      throw new Error(
+        `Transaction not mined within ${RECEIPT_TIMEOUT_MS / 1000}s: ${hash} (is automine off and block not mined?)`,
+      );
+    }
     if (receipt.status === "reverted") {
-      failures.push(hash);
+      const detail = await explainRevertedTx(hash);
+      console.error("[tx] reverted:", detail);
+      failureDetails.push(detail);
     }
   }
 
   await stopUsdtWhaleImpersonation();
 
-  if (failures.length > 0) {
-    throw new Error(`Transaction(s) reverted: ${failures.join(", ")}`);
+  if (failureDetails.length > 0) {
+    throw new Error(failureDetails.join(" | "));
   }
 }

@@ -16,7 +16,7 @@ export const ANVIL_ACCOUNTS = ANVIL_PRIVATE_KEYS.map(
   (key) => privateKeyToAccount(key).address,
 ) as readonly [Address, Address, Address, Address, Address, Address];
 
-export const FORK_BLOCK = 25257218;
+export const FORK_BLOCK = 25272364;
 export const ANVIL_RPC = "http://127.0.0.1:8545";
 
 export const OWNER = ANVIL_ACCOUNTS[0];
