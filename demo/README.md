@@ -51,7 +51,7 @@ Express API (:8787)
 Anvil fork (:8545) + contracts from project/
 ```
 
-## Actors (Anvil accounts 0–4)
+## Actors (Anvil accounts 0–5)
 
 | Role        | Account |
 |-------------|---------|
