@@ -58,5 +58,6 @@ Anvil fork (:8545) + contracts from project/
 | Owner       | #0      |
 | LP          | #1      |
 | Swapper     | #2      |
-| Sync keeper | #3      |
-| Plain arb   | #4      |
+| Feed keeper | #3      |
+| Sync keeper | #4      |
+| Plain arb   | #5      |
