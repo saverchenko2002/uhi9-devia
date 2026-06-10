@@ -54,3 +54,7 @@ The project does not currently integrate any external partner protocols or SDKs.
 ## Theme Alignment (Uniswap Hookathon: “Impermanent Loss & Yield Systems”)
 
 The project is directly aligned with the hackathon theme. It focuses on impermanent loss mitigation and yield system optimization through dynamic fees, oracle-aware pricing, and keeper-based synchronization mechanisms designed to reduce toxic flow and improve LP efficiency.
+
+---
+
+Setup and build instructions live in each subfolder — see [`project/README.md`](project/README.md) (Foundry contracts) and [`demo/README.md`](demo/README.md) (local simulation UI).

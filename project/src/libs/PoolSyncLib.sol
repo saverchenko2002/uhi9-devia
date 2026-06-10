@@ -16,7 +16,7 @@ import {PoolPriceLib} from "src/libs/PoolPriceLib.sol";
 import {PoolConfig} from "src/types/PoolConfigTypes.sol";
 import {PriceScale} from "src/types/PriceScaleTypes.sol";
 
-/// @notice План свапа, чтобы цена пула (token1/token0) совпала с target или oracle.
+/// @notice Swap plan to align pool price (token1/token0) with target or oracle.
 library PoolSyncLib {
 
     using StateLibrary for IPoolManager;
@@ -26,7 +26,7 @@ library PoolSyncLib {
     error ZeroPoolLiquidity();
     error TargetSqrtOutOfBounds(uint160 sqrtPriceX96);
 
-    /// @notice Какой exact-in свап сделать, чтобы дойти до targetPriceScaled.
+    /// @notice Exact-in swap needed to reach targetPriceScaled.
     struct QuoteToTargetPlan {
         bool zeroForOne;
         uint256 amountIn;

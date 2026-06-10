@@ -15,7 +15,7 @@
     "poolManager": "0x000000000004444c5dc75cB358380D2e3dE08A90",
     "hookedCurrency0": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
     "hookedCurrency1": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
-    "hookedPoolId": "0x64f7046c7c25da586293dc263cb86f04c7389d14701abe981a0ddccfb87340be",
+    "hookedPoolId": "0x01383afb2540feafb8a0f15037bb6c9ef2bacda5edf557a84bd66799baeda8d9",
     "plainPoolId": "0xcf6165560c9a557e4f3b5b401e21dd651a177d9b93c60a93d7e8e24362d130c6",
     "mockPyth": "0x3aa3dce3a62fd37ce28c1120d34a970b371cb69e",
     "registry": "0xe5e56701f7e241cc8c598615c4fbf6ef1ecf27b6",
@@ -23,7 +23,7 @@
     "syncKeepers": "0xeda71b4bcf8ccd0b6eccc021bb3c8c2ad29ba21e",
     "keepersTreasury": "0xb22e25fd4ac4e913384c02209b73b2fd256f511a",
     "executor": "0xb8fa00f68457e3234f22502a3a554fe6a36ce259",
-    "dynamicFeeHook": "0x9a82ee26f229b064ddaeeb6380bb74d832e7d0c8",
+    "dynamicFeeHook": "0x107d82a77747c1a2b0285453e761102ed6dc90c8",
     "liqRouter": "0xf5c1078628a8da58feb58e750c77912619a3a014",
     "swapRouter": "0x6c4718009200f486217dd3a371390f592fbbe025",
     "mockRouter": "0x198a9fb08a3a376a5fa7f8cd622f7d5411699480"

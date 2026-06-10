@@ -10,7 +10,7 @@ import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PoolConfigLib} from "src/libs/PoolConfigLib.sol";
 import {PoolConfig} from "src/types/PoolConfigTypes.sol";
 
-/// @notice Dynamic swap fee, notional fee на свапе, feed keeper attribution.
+/// @notice Dynamic swap fee, notional fee on swap, feed keeper attribution.
 library PoolFeeLib {
 
     uint256 internal constant PIPS_DENOMINATOR = 1_000_000;

@@ -10,7 +10,7 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
-/// @notice Settle + exact-in swap в unlock; hookData для min fee на keeper sync.
+/// @notice Settle + exact-in swap inside unlock; hookData carries min fee for keeper sync.
 library UniswapV4Lib {
 
     using SafeERC20 for IERC20;
@@ -39,7 +39,7 @@ library UniswapV4Lib {
         manager.settle();
     }
 
-    /// @dev Вызывать только из unlockCallback.
+    /// @dev Call only from unlockCallback.
     function swapExactIn(
         IPoolManager manager,
         PoolKey memory key,

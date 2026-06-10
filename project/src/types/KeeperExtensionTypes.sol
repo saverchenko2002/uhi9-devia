@@ -26,16 +26,16 @@ struct FeedUpdateData {
 
 /// @notice Sync arb: leg 1 — v4 on-chain, leg 2 — `externalSwap` (required).
 ///
-/// Пул 2000 / мир 2100 (ETH=token0, USDC=token1):
-///   1) Keeper кладёт USDC (capital) на KeeperExecutor
-///   2) Пул: USDC → ETH (к target)
-///   3) External: ETH → USDC по рыночной цене
-///   4) Профит: donate в пул + payout keeper/treasury по каждому profit-токену (profitToken + capital gain)
-///   5) Остаток capital (USDC) возвращается keeper
+/// Pool 2000 / market 2100 (ETH=token0, USDC=token1):
+///   1) Keeper deposits USDC (capital) on KeeperExecutor
+///   2) Pool: USDC → ETH (toward target)
+///   3) External: ETH → USDC at market price
+///   4) Profit: donate to pool + payout keeper/treasury per profit token (profitToken + capital gain)
+///   5) Remaining capital (USDC) returned to keeper
 struct SyncData {
     uint256 targetPriceScaled;
     uint8 priceDecimals;
-    /// @dev [0:20] executor address + calldata внешней ноги арба (min 20 bytes).
+    /// @dev [0:20] executor address + calldata for the external arb leg (min 20 bytes).
     bytes externalSwap;
 }
 

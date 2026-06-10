@@ -149,7 +149,7 @@ library KeeperSyncLib {
         }
     }
 
-    // --- donation из arbProfit ---
+    // --- donation from arbProfit ---
 
     function computeDonationAmount(
         DonateMode mode,

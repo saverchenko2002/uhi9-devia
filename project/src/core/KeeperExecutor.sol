@@ -24,7 +24,7 @@ import {KeeperExecutorErrors} from "src/errors/KeeperExecutorErrors.sol";
 import {UniswapV4Lib} from "src/libs/UniswapV4Lib.sol";
 
 /// @title KeeperExecutor
-/// @notice Sync: пул on-chain → [опционально external] → donate маржи → payout → возврат capital.
+/// @notice Sync: on-chain pool → [optional external] → donate margin → payout → return capital.
 contract KeeperExecutor is IKeeperExecutor, IKeeperExecutorCallbacks, BaseInit, IUnlockCallback {
 
     using SafeERC20 for IERC20;

@@ -895,9 +895,6 @@ export default function App() {
         </div>
 
         <div className="flex shrink-0 flex-wrap gap-3">
-          <Button variant="secondary" onClick={refresh} disabled={loading || seeding || swapping}>
-            Refresh state
-          </Button>
           <Button variant="primary" onClick={handleInit} disabled={loading || seeding || swapping}>
             {loading && <span className="spinner" />}
             {loading ? "Bootstrapping…" : ready ? "Reset simulation" : "Launch simulation"}

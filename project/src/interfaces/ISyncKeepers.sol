@@ -21,7 +21,7 @@ interface ISyncKeepers {
 
     function lastSyncBlock(bytes32 poolId) external view returns (uint256);
 
-    /// @notice Активный sync-keeper для fee share (в пределах window).
+    /// @notice Active sync-keeper for fee share (within window).
     function getActiveSyncKeeper(bytes32 poolId)
         external
         view

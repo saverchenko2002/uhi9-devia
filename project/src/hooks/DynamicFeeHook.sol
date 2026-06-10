@@ -157,6 +157,18 @@ contract DynamicFeeHook is BaseHook {
             );
         }
 
+        (uint24 lpFeeBps, BeforeSwapDelta beforeSwapDelta) =
+            _preparePublicBeforeSwap(poolId, key, params, cfg);
+
+        return (BaseHook.beforeSwap.selector, beforeSwapDelta, _overrideLpFee(lpFeeBps));
+    }
+
+    function _preparePublicBeforeSwap(
+        bytes32 poolId,
+        PoolKey calldata key,
+        SwapParams calldata params,
+        PoolConfig memory cfg
+    ) internal returns (uint24 lpFeeBps, BeforeSwapDelta beforeSwapDelta) {
         (uint256 poolPrice, uint256 oraclePrice, uint64 oracleTs) =
             _readOracleContext(poolId, key, cfg);
 
@@ -169,43 +181,56 @@ contract DynamicFeeHook is BaseHook {
         uint16 effectiveLpBps = PoolFeeLib.effectiveLpShareBps(
             feedProvider, syncKeeper, cfg.lpShareBps, cfg.syncShareBps, cfg.feedShareBps
         );
-        uint24 lpFeeBps = PoolFeeLib.lpFeeBpsFromEffectiveShare(fullFeeBps, effectiveLpBps);
-
-        BeforeSwapDelta beforeSwapDelta = BeforeSwapDeltaLibrary.ZERO_DELTA;
+        lpFeeBps = PoolFeeLib.lpFeeBpsFromEffectiveShare(fullFeeBps, effectiveLpBps);
+        beforeSwapDelta = BeforeSwapDeltaLibrary.ZERO_DELTA;
 
         // Exact-in: peel sync/feed keeper fee off the specified (input) leg before the pool swap.
         if (params.amountSpecified < 0) {
-            uint256 amountIn = uint256(-params.amountSpecified);
-            uint256 totalFee =
-                FullMath.mulDivRoundingUp(amountIn, fullFeeBps, PoolFeeLib.PIPS_DENOMINATOR);
-
-            PoolFeeLib.SwapFeeSplit memory split = PoolFeeLib.splitSwapFee(
-                totalFee,
-                feedProvider,
-                syncKeeper,
-                cfg.lpShareBps,
-                cfg.syncShareBps,
-                cfg.feedShareBps
+            beforeSwapDelta = _chargeExactInKeeperFee(
+                key, params, fullFeeBps, feedProvider, syncKeeper, cfg, oracleTs
             );
+        }
+    }
 
-            uint256 keeperTotalInFeeToken = split.syncAmount + split.feedAmount;
-            Currency specified = params.zeroForOne ? key.currency0 : key.currency1;
+    function _chargeExactInKeeperFee(
+        PoolKey calldata key,
+        SwapParams calldata params,
+        uint24 fullFeeBps,
+        address feedProvider,
+        address syncKeeper,
+        PoolConfig memory cfg,
+        uint64 oracleTs
+    ) internal returns (BeforeSwapDelta beforeSwapDelta) {
+        beforeSwapDelta = BeforeSwapDeltaLibrary.ZERO_DELTA;
 
-            if (keeperTotalInFeeToken > 0) {
-                poolManager.take(specified, address(this), keeperTotalInFeeToken);
-                beforeSwapDelta = toBeforeSwapDelta(int128(uint128(keeperTotalInFeeToken)), 0);
-            }
+        uint256 amountIn = uint256(-params.amountSpecified);
+        uint256 totalFee =
+            FullMath.mulDivRoundingUp(amountIn, fullFeeBps, PoolFeeLib.PIPS_DENOMINATOR);
 
-            _pendingPublicSwapFee = PendingPublicSwapFee({
-                totalFee: totalFee,
-                keeperTake: keeperTotalInFeeToken,
-                feeToken: Currency.unwrap(specified),
-                pythPublishTime: oracleTs,
-                set: true
-            });
+        PoolFeeLib.SwapFeeSplit memory split = PoolFeeLib.splitSwapFee(
+            totalFee,
+            feedProvider,
+            syncKeeper,
+            cfg.lpShareBps,
+            cfg.syncShareBps,
+            cfg.feedShareBps
+        );
+
+        uint256 keeperTotalInFeeToken = split.syncAmount + split.feedAmount;
+        Currency specified = params.zeroForOne ? key.currency0 : key.currency1;
+
+        if (keeperTotalInFeeToken > 0) {
+            poolManager.take(specified, address(this), keeperTotalInFeeToken);
+            beforeSwapDelta = toBeforeSwapDelta(int128(uint128(keeperTotalInFeeToken)), 0);
         }
 
-        return (BaseHook.beforeSwap.selector, beforeSwapDelta, _overrideLpFee(lpFeeBps));
+        _pendingPublicSwapFee = PendingPublicSwapFee({
+            totalFee: totalFee,
+            keeperTake: keeperTotalInFeeToken,
+            feeToken: Currency.unwrap(specified),
+            pythPublishTime: oracleTs,
+            set: true
+        });
     }
 
     function _afterSwap(

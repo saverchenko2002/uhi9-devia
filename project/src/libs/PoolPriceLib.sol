@@ -15,10 +15,10 @@ import {PoolConfigLib} from "src/libs/PoolConfigLib.sol";
 import {PoolConfig} from "src/types/PoolConfigTypes.sol";
 import {PriceScale} from "src/types/PriceScaleTypes.sol";
 
-/// @notice Цена пула: sqrtPriceX96 ↔ priceScaled, decimals пары, Pyth.
+/// @notice Pool price: sqrtPriceX96 ↔ priceScaled, pair decimals, Pyth.
 library PoolPriceLib {
 
-    // --- sqrtPriceX96 ↔ priceScaled (token1 per token0, см. PriceScale) ---
+    // --- sqrtPriceX96 ↔ priceScaled (token1 per token0, see PriceScale) ---
 
     function priceScaledFromSqrtPriceX96(uint160 sqrtPriceX96, PriceScale memory scale)
         internal
@@ -54,7 +54,7 @@ library PoolPriceLib {
         return uint160(Math.sqrt(FullMath.mulDiv(amount1, 1 << 192, amount0)));
     }
 
-    // --- PriceScale из PoolKey ---
+    // --- PriceScale from PoolKey ---
 
     function priceScaleFromPoolKey(PoolKey memory key, uint8 priceDecimals)
         internal
